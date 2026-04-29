@@ -757,7 +757,7 @@ export default function Home() {
                     onKeyDown={e => e.key === "Enter" && addPerson()}
                     placeholder="Name"
                     autoComplete="off"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                   {/* Autocomplete dropdown */}
                   {newPersonName.trim().length > 0 && (() => {
@@ -833,7 +833,7 @@ export default function Home() {
                   onChange={e => setNewTeamName(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && addTeam()}
                   placeholder="Team name (e.g. Radio)"
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
                 <select
                   value={newTeamRoom}
@@ -888,7 +888,7 @@ export default function Home() {
                 onChange={e => setNewRoomName(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && addRoom()}
                 placeholder="Room name (e.g. H1)"
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
               <button onClick={addRoom} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
             </div>
@@ -929,7 +929,7 @@ export default function Home() {
                 <input
                   value={editTeam.name}
                   onChange={e => setEditTeam(prev => prev ? { ...prev, name: e.target.value } : prev)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   autoFocus
                 />
               </div>
@@ -987,7 +987,7 @@ export default function Home() {
                   value={editSession.name ?? ""}
                   onChange={e => setEditSession(p => ({ ...p!, name: e.target.value }))}
                   placeholder="e.g. Sprint Review"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   autoFocus
                 />
               </div>
@@ -1011,7 +1011,7 @@ export default function Home() {
                   value={editSession.notes ?? ""}
                   onChange={e => setEditSession(p => ({ ...p!, notes: e.target.value }))}
                   placeholder="Any notes..."
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </div>
               <div>
