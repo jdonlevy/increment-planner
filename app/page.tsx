@@ -64,6 +64,7 @@ export default function Home() {
   const [dragId,      setDragId]     = useState<string | null>(null); // sessionId being dragged
   const [dragFromPl,  setDragFromPl] = useState<string | null>(null); // placementId if from grid
   const [dragOver,    setDragOver]   = useState<string | null>(null); // "roomId:slotIdx" hover target
+  const [expandedPl,  setExpandedPl] = useState<string | null>(null); // placementId expanded in grid
 
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonTeam, setNewPersonTeam] = useState("");
@@ -143,8 +144,9 @@ export default function Home() {
   const teamList    = Object.values(teams);
   const peopleList  = Object.values(people);
 
-  const clashPlacementIds = useCallback((): Set<string> => {
-    const set = new Set<string>();
+  // Returns map of placementId -> clashing person names
+  const clashMap = useCallback((): Map<string, string[]> => {
+    const map = new Map<string, string[]>();
     const grouped: Record<string, Placement[]> = {};
     placements.forEach(pl => {
       const key = `${pl.day}:${pl.slotIdx}`;
@@ -158,17 +160,22 @@ export default function Home() {
           const a = sessions[group[i].sessionId];
           const b = sessions[group[j].sessionId];
           if (!a || !b) continue;
-          if (a.attendeeIds.some(id => b.attendeeIds.includes(id))) {
-            set.add(group[i].id);
-            set.add(group[j].id);
+          const clashing = a.attendeeIds
+            .filter(id => b.attendeeIds.includes(id))
+            .map(id => people[id]?.name)
+            .filter(Boolean) as string[];
+          if (clashing.length > 0) {
+            map.set(group[i].id, [...(map.get(group[i].id) ?? []), ...clashing]);
+            map.set(group[j].id, [...(map.get(group[j].id) ?? []), ...clashing]);
           }
         }
       }
     });
-    return set;
-  }, [placements, sessions]);
+    return map;
+  }, [placements, sessions, people]);
 
-  const clashIds    = clashPlacementIds();
+  const clashData   = clashMap();
+  const clashIds    = new Set(clashData.keys());
   const clashCount  = clashIds.size;
   const totalPlaced = placedIds.size;
 
@@ -515,25 +522,50 @@ export default function Home() {
               )}
               {unscheduled.map(session => {
                 const isSelected = selectedId === session.id;
-                const color      = sessionColor(session);
+                const isSidebarExpanded = expandedPl === `sidebar-${session.id}`;
+                const color = sessionColor(session);
                 return (
                   <div
                     key={session.id}
                     draggable
                     onDragStart={() => { handleDragStart(session.id); setSelectedId(null); }}
                     onDragEnd={() => { setDragId(null); setDragFromPl(null); setDragOver(null); }}
-                    onClick={() => mode === "place" && setSelectedId(isSelected ? null : session.id)}
-                    className={`rounded-lg px-3 py-2 cursor-grab active:cursor-grabbing border-2 transition-all ${
+                    className={`rounded-lg px-3 py-2 border-2 transition-all ${
                       isSelected
-                        ? "border-indigo-500 bg-indigo-50"
-                        : "border-slate-200 hover:border-indigo-300 bg-slate-50"
+                        ? "border-indigo-500 bg-indigo-50 cursor-grab active:cursor-grabbing"
+                        : "border-slate-200 hover:border-indigo-300 bg-slate-50 cursor-grab active:cursor-grabbing"
                     }`}
                   >
-                    <p className="font-medium text-slate-800 text-xs leading-tight">{session.name}</p>
+                    <div className="flex items-start justify-between gap-1">
+                      <p
+                        onClick={() => mode === "place" && setSelectedId(isSelected ? null : session.id)}
+                        className="font-medium text-slate-800 text-xs leading-tight flex-1 cursor-pointer"
+                      >{session.name}</p>
+                      <button
+                        onMouseDown={e => e.stopPropagation()}
+                        onClick={e => { e.stopPropagation(); setExpandedPl(isSidebarExpanded ? null : `sidebar-${session.id}`); }}
+                        className="text-slate-400 hover:text-indigo-500 text-xs leading-none shrink-0"
+                      >{isSidebarExpanded ? "▲" : "▼"}</button>
+                    </div>
                     <p className="text-slate-400 text-xs mt-0.5">
                       {session.attendeeIds.length} attendee{session.attendeeIds.length !== 1 ? "s" : ""}
                     </p>
                     {isSelected && <p className="text-indigo-500 text-xs font-medium mt-1">→ click or drag a cell</p>}
+                    {isSidebarExpanded && (
+                      <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex flex-wrap gap-1">
+                        {session.attendeeIds.map(pid => {
+                          const person = people[pid];
+                          if (!person) return null;
+                          const team = teams[person.teamId];
+                          const c = team ? COLORS[team.colorIdx] : COLORS[0];
+                          return (
+                            <span key={pid} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${c.pill}`}>
+                              {person.name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -566,7 +598,7 @@ export default function Home() {
             )}
             {clashCount > 0 && (
               <div className="mb-3 bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700">
-                ⚠ <strong>{clashCount} placement{clashCount !== 1 ? "s" : ""}</strong> have person clashes — the same person is double-booked.
+                ⚠ <strong>{clashCount} placement{clashCount !== 1 ? "s" : ""}</strong> have person clashes — hover a session and click ▼ to see who's double-booked.
               </div>
             )}
 
@@ -606,7 +638,9 @@ export default function Home() {
                           const placement   = placements.find(p => p.roomId === room.id && p.day === activeDay && p.slotIdx === slotIdx);
                           const session     = placement ? sessions[placement.sessionId] : null;
                           const isBlockedCell = blocked.some(b => b.roomId === room.id && b.day === activeDay && b.slotIdx === slotIdx);
-                          const isClash     = placement ? clashIds.has(placement.id) : false;
+                          const isClash       = placement ? clashIds.has(placement.id) : false;
+                          const clashPeople   = placement ? (clashData.get(placement.id) ?? []) : [];
+                          const isExpanded    = placement ? expandedPl === placement.id : false;
                           const color       = session ? sessionColor(session) : COLORS[0];
                           const dropKey     = `${room.id}:${slotIdx}`;
                           const isDragTarget = dragOver === dropKey;
@@ -650,16 +684,47 @@ export default function Home() {
                                 >
                                   <div className="flex items-start justify-between gap-1">
                                     <p className="font-semibold text-xs leading-tight">{session.name}</p>
-                                    <button
-                                      onMouseDown={e => e.stopPropagation()}
-                                      onClick={e => { e.stopPropagation(); unplace(placement!.id); }}
-                                      className="text-slate-400 hover:text-red-500 text-xs shrink-0 leading-none"
-                                    >✕</button>
+                                    <div className="flex gap-1 shrink-0">
+                                      <button
+                                        onMouseDown={e => e.stopPropagation()}
+                                        onClick={e => { e.stopPropagation(); setExpandedPl(isExpanded ? null : placement!.id); }}
+                                        className="text-slate-400 hover:text-indigo-500 text-xs leading-none"
+                                        title={isExpanded ? "Collapse" : "Show attendees"}
+                                      >{isExpanded ? "▲" : "▼"}</button>
+                                      <button
+                                        onMouseDown={e => e.stopPropagation()}
+                                        onClick={e => { e.stopPropagation(); unplace(placement!.id); }}
+                                        className="text-slate-400 hover:text-red-500 text-xs leading-none"
+                                      >✕</button>
+                                    </div>
                                   </div>
                                   <p className="text-[10px] text-slate-500 mt-0.5">
                                     {session.attendeeIds.length} people
                                   </p>
-                                  {isClash && <p className="text-[10px] text-red-600 font-semibold">⚠ Person clash</p>}
+                                  {isClash && (
+                                    <p className="text-[10px] text-red-600 font-semibold mt-0.5">
+                                      ⚠ Clash: {[...new Set(clashPeople)].join(", ")}
+                                    </p>
+                                  )}
+                                  {isExpanded && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-black/10 flex flex-wrap gap-1">
+                                      {session.attendeeIds.map(pid => {
+                                        const person = people[pid];
+                                        if (!person) return null;
+                                        const isClashing = clashPeople.includes(person.name);
+                                        return (
+                                          <span
+                                            key={pid}
+                                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                                              isClashing ? "bg-red-200 text-red-800" : "bg-black/10 text-current"
+                                            }`}
+                                          >
+                                            {person.name}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                 </div>
                               ) : (
                                 <div
