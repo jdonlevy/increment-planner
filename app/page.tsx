@@ -11,7 +11,7 @@ type Session   = { id: string; name: string; teamId: string; attendeeIds: string
 type Placement = { id: string; sessionId: string; roomId: string; day: Day; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: Day; slotIdx: number };
 type Day       = "mon" | "tue" | "thu";
-type Tab       = "schedule" | "sessions" | "people" | "rooms";
+type Tab       = "schedule" | "sessions" | "people" | "teams" | "rooms";
 type Mode      = "place" | "block";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -355,6 +355,32 @@ export default function Home() {
     });
   };
 
+  // ── Team CRUD ─────────────────────────────────────────────────────────────
+
+  const [newTeamName,   setNewTeamName]   = useState("");
+  const [newTeamRoom,   setNewTeamRoom]   = useState("");
+  const [editTeam,      setEditTeam]      = useState<Team | null>(null);
+
+  const addTeam = () => {
+    if (!newTeamName.trim()) return;
+    const t: Team = { id: uid(), name: newTeamName.trim(), roomId: newTeamRoom, colorIdx: teamList.length % COLORS.length };
+    setTeams(prev => ({ ...prev, [t.id]: t }));
+    setNewTeamName("");
+    setNewTeamRoom("");
+  };
+
+  const saveTeam = () => {
+    if (!editTeam?.name?.trim()) return;
+    setTeams(prev => ({ ...prev, [editTeam.id]: editTeam }));
+    setEditTeam(null);
+  };
+
+  const deleteTeam = (id: string) => {
+    setTeams(prev => { const n = { ...prev }; delete n[id]; return n; });
+    setPeople(prev => { const n = { ...prev }; Object.values(n).forEach(p => { if (p.teamId === id) delete n[p.id]; }); return n; });
+    setSessions(prev => { const n = { ...prev }; Object.values(n).forEach(s => { if (s.teamId === id) delete n[s.id]; }); return n; });
+  };
+
   // ── Room CRUD ─────────────────────────────────────────────────────────────
 
   const addRoom = () => {
@@ -424,7 +450,7 @@ export default function Home() {
 
       {/* Nav */}
       <nav className="bg-white border-b border-slate-200 px-6 flex gap-1">
-        {(["schedule","sessions","people","rooms"] as Tab[]).map(t => (
+        {(["schedule","sessions","people","teams","rooms"] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -434,6 +460,7 @@ export default function Home() {
           >
             {t === "sessions" ? `Sessions (${Object.keys(sessions).length})`
               : t === "people" ? `People (${Object.keys(people).length})`
+              : t === "teams"  ? `Teams (${Object.keys(teams).length})`
               : t === "rooms"  ? `Rooms (${Object.keys(rooms).length})`
               : "Schedule"}
           </button>
@@ -758,6 +785,62 @@ export default function Home() {
         </div>
       )}
 
+      {/* ── TEAMS TAB ── */}
+      {tab === "teams" && (
+        <div className="p-6 overflow-y-auto flex-1">
+          <div className="max-w-2xl mx-auto space-y-4">
+            <h2 className="font-semibold text-slate-800">Teams</h2>
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+              <div className="flex gap-3">
+                <input
+                  value={newTeamName}
+                  onChange={e => setNewTeamName(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && addTeam()}
+                  placeholder="Team name (e.g. Radio)"
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                <select
+                  value={newTeamRoom}
+                  onChange={e => setNewTeamRoom(e.target.value)}
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                >
+                  <option value="">No room assigned</option>
+                  {roomList.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+                <button onClick={addTeam} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
+              </div>
+              {roomList.length === 0 && (
+                <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">Add rooms first so you can assign them to teams</p>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100">
+              {teamList.length === 0 && <p className="p-4 text-xs text-slate-400 italic">No teams added yet</p>}
+              {teamList.map(team => {
+                const color = COLORS[team.colorIdx];
+                const homeRoom = rooms[team.roomId];
+                const memberCount = peopleList.filter(p => p.teamId === team.id).length;
+                return (
+                  <div key={team.id} className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${color.pill}`}>{team.name}</span>
+                      <span className="text-xs text-slate-500">
+                        {homeRoom ? `Room: ${homeRoom.name}` : <span className="text-amber-500">No room assigned</span>}
+                      </span>
+                      <span className="text-xs text-slate-400">{memberCount} member{memberCount !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditTeam(team)} className="text-xs text-slate-400 hover:text-indigo-600 px-2 py-1 rounded hover:bg-indigo-50 transition-colors">Edit</button>
+                      <button onClick={() => deleteTeam(team.id)} className="text-xs text-slate-400 hover:text-red-500 px-2 py-1 rounded hover:bg-red-50 transition-colors">Delete</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── ROOMS TAB ── */}
       {tab === "rooms" && (
         <div className="p-6 overflow-y-auto flex-1">
@@ -791,6 +874,63 @@ export default function Home() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── TEAM EDIT MODAL ── */}
+      {editTeam && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h2 className="font-semibold text-slate-900">Edit Team</h2>
+              <button onClick={() => setEditTeam(null)} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Team name</label>
+                <input
+                  value={editTeam.name}
+                  onChange={e => setEditTeam(prev => prev ? { ...prev, name: e.target.value } : prev)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Home room</label>
+                <select
+                  value={editTeam.roomId}
+                  onChange={e => setEditTeam(prev => prev ? { ...prev, roomId: e.target.value } : prev)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                >
+                  <option value="">No room assigned</option>
+                  {roomList.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">Auto-scheduler places this team's sessions here first</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-2">Colour</label>
+                <div className="flex gap-2 flex-wrap">
+                  {COLORS.map((c, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setEditTeam(prev => prev ? { ...prev, colorIdx: i } : prev)}
+                      className={`w-6 h-6 rounded-full ${c.pill.split(" ")[0]} border-2 transition-all ${editTeam.colorIdx === i ? "border-slate-800 scale-110" : "border-transparent"}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-2">
+              <button onClick={() => setEditTeam(null)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
+              <button
+                onClick={saveTeam}
+                disabled={!editTeam.name.trim()}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>
