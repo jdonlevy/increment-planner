@@ -3,11 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 // GET — load everything
 export async function GET() {
-  console.log("DB env check:", {
-    PRISMA_DATABASE_URL: !!process.env.PRISMA_DATABASE_URL,
-    POSTGRES_URL: !!process.env.POSTGRES_URL,
-    DATABASE_URL: !!process.env.DATABASE_URL,
-  });
   const [rooms, teams, people, sessions, placements, blocked] = await Promise.all([
     prisma.room.findMany(),
     prisma.team.findMany(),
