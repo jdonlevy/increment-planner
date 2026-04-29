@@ -10,51 +10,51 @@ model Room {
   id         String      @id @default(cuid())
   name       String
   createdAt  DateTime    @default(now())
-  teams      Team[]
-  placements Placement[]
   blocked    Blocked[]
+  placements Placement[]
+  teams      Team[]
 }
 
 model Team {
-  id         String    @id @default(cuid())
-  name       String
-  colorIdx   Int       @default(0)
-  roomId     String
-  room       Room      @relation(fields: [roomId], references: [id])
-  createdAt  DateTime  @default(now())
-  people     Person[]
-  sessions   Session[]
+  id        String    @id @default(cuid())
+  name      String
+  colorIdx  Int       @default(0)
+  roomId    String
+  createdAt DateTime  @default(now())
+  people    Person[]
+  sessions  Session[]
+  room      Room      @relation(fields: [roomId], references: [id])
 }
 
 model Person {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
   teamId    String
-  team      Team     @relation(fields: [teamId], references: [id])
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  team      Team      @relation(fields: [teamId], references: [id])
   sessions  Session[] @relation("SessionAttendees")
 }
 
 model Session {
-  id          String      @id @default(cuid())
-  name        String
-  notes       String      @default("")
-  teamId      String
-  team        Team        @relation(fields: [teamId], references: [id])
-  createdAt   DateTime    @default(now())
-  attendees   Person[]    @relation("SessionAttendees")
-  placements  Placement[]
+  id         String      @id @default(cuid())
+  name       String
+  notes      String      @default("")
+  teamId     String
+  createdAt  DateTime    @default(now())
+  placements Placement[]
+  team       Team        @relation(fields: [teamId], references: [id])
+  attendees  Person[]    @relation("SessionAttendees")
 }
 
 model Placement {
   id        String   @id @default(cuid())
   sessionId String
-  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   roomId    String
-  room      Room     @relation(fields: [roomId], references: [id])
   day       String
   slotIdx   Int
   createdAt DateTime @default(now())
+  room      Room     @relation(fields: [roomId], references: [id])
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([roomId, day, slotIdx])
 }
@@ -62,10 +62,10 @@ model Placement {
 model Blocked {
   id        String   @id @default(cuid())
   roomId    String
-  room      Room     @relation(fields: [roomId], references: [id])
   day       String
   slotIdx   Int
   createdAt DateTime @default(now())
+  room      Room     @relation(fields: [roomId], references: [id])
 
   @@unique([roomId, day, slotIdx])
 }
