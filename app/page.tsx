@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 type Person    = { id: string; name: string; teamId: string };
 type Team      = { id: string; name: string; roomId: string; colorIdx: number };
 type Room      = { id: string; name: string };
-type Session   = { id: string; name: string; attendeeIds: string[]; notes: string };
+type Session   = { id: string; name: string; teamId: string; attendeeIds: string[]; notes: string };
 type Placement = { id: string; sessionId: string; roomId: string; day: Day; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: Day; slotIdx: number };
 type Day       = "mon" | "tue" | "thu";
@@ -84,21 +84,22 @@ function seedData() {
     p[pids[i]] = { id: pids[i], name, teamId: tids[ti] };
   });
 
-  const sessionDefs: [string, number[]][] = [
-    ["Sprint Review",       [0,1,6,7]],
-    ["Dependency Mapping",  [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]],
-    ["Partnerships Review", [3,4,14,15]],
-    ["Backlog Refinement",  [0,1,2]],
-    ["Architecture Sync",   [6,7,8,9]],
-    ["Ireland Roll Out",    [13,14]],
-    ["Capacity Planning",   [0,1,3,4]],
-    ["Release Planning",    [10,11,12]],
-    ["Cross-team Demo",     [0,3,6,10,13,15]],
-    ["Risk Review",         [6,7,15,16]],
+  // [name, teamIdx, attendeePidxs]
+  const sessionDefs: [string, number, number[]][] = [
+    ["Sprint Review",       0, [0,1,6,7]],
+    ["Dependency Mapping",  0, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]],
+    ["Partnerships Review", 1, [3,4,14,15]],
+    ["Backlog Refinement",  0, [0,1,2]],
+    ["Architecture Sync",   2, [6,7,8,9]],
+    ["Ireland Roll Out",    5, [13,14]],
+    ["Capacity Planning",   0, [0,1,3,4]],
+    ["Release Planning",    3, [10,11,12]],
+    ["Cross-team Demo",     0, [0,3,6,10,13,15]],
+    ["Risk Review",         6, [6,7,15,16]],
   ];
-  sessionDefs.forEach(([name, pidxs]) => {
+  sessionDefs.forEach(([name, teamIdx, pidxs]) => {
     const id = uid();
-    s[id] = { id, name, attendeeIds: pidxs.map(i => pids[i]), notes: "" };
+    s[id] = { id, name, teamId: tids[teamIdx], attendeeIds: pidxs.map(i => pids[i]), notes: "" };
   });
 
   return { rooms: r, teams: t, people: p, sessions: s };
@@ -249,11 +250,17 @@ export default function Home() {
 
     for (const session of unplaced) {
       let placed = false;
+      const homeRoom = teams[session.teamId]?.roomId;
+      // Prefer home room, then any room
+      const orderedRooms = homeRoom
+        ? [rooms[homeRoom], ...roomList.filter(r => r.id !== homeRoom)].filter(Boolean)
+        : roomList;
+
       for (const { key: day } of DAYS) {
         if (placed) break;
         for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
           if (placed || slotIdx === LUNCH_SLOT) continue;
-          for (const room of roomList) {
+          for (const room of orderedRooms) {
             if (roomBusy(room.id, day, slotIdx)) continue;
             if (isBlocked(room.id, day, slotIdx)) continue;
             if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
@@ -305,10 +312,11 @@ export default function Home() {
   // ── Session CRUD ──────────────────────────────────────────────────────────
 
   const saveSession = () => {
-    if (!editSession?.name?.trim()) return;
+    if (!editSession?.name?.trim() || !editSession?.teamId) return;
     const s: Session = {
       id:          editSession.id ?? uid(),
       name:        editSession.name.trim(),
+      teamId:      editSession.teamId,
       attendeeIds: editSession.attendeeIds ?? [],
       notes:       editSession.notes ?? "",
     };
@@ -368,8 +376,7 @@ export default function Home() {
   // ─────────────────────────────────────────────────────────────────────────
 
   const sessionColor = (session: Session) => {
-    const person = people[session.attendeeIds[0]];
-    const team   = person ? teams[person.teamId] : null;
+    const team = teams[session.teamId];
     return team ? COLORS[team.colorIdx] : COLORS[0];
   };
 
@@ -665,6 +672,7 @@ export default function Home() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-semibold text-slate-900">{session.name}</h3>
+                        {(() => { const t = teams[session.teamId]; return t ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${COLORS[t.colorIdx].pill}`}>{t.name}</span> : null; })()}
                         {placement ? (
                           <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-0.5 rounded-full font-medium">
                             {DAYS.find(d => d.key === placement.day)?.label} · {SLOTS[placement.slotIdx]} · {rooms[placement.roomId]?.name}
@@ -800,6 +808,20 @@ export default function Home() {
                 />
               </div>
               <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Owning team <span className="text-red-400">*</span></label>
+                <select
+                  value={editSession.teamId ?? ""}
+                  onChange={e => setEditSession(p => ({ ...p!, teamId: e.target.value }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                >
+                  <option value="">Select team...</option>
+                  {teamList.map(t => (
+                    <option key={t.id} value={t.id}>{t.name} (home room: {rooms[t.roomId]?.name ?? "none"})</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">Session will be scheduled in this team's home room by default</p>
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1.5">Notes (optional)</label>
                 <input
                   value={editSession.notes ?? ""}
@@ -846,7 +868,7 @@ export default function Home() {
               <button onClick={() => setEditSession(null)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
               <button
                 onClick={saveSession}
-                disabled={!editSession.name?.trim()}
+                disabled={!editSession.name?.trim() || !editSession.teamId}
                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
               >
                 Save Session
