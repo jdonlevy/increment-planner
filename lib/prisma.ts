@@ -5,7 +5,14 @@ import { Pool } from "@neondatabase/serverless";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function createPrismaClient() {
-  const pool = new Pool({ connectionString: process.env.POSTGRES_URL });
+  const connectionString =
+    process.env.PRISMA_DATABASE_URL ??
+    process.env.POSTGRES_URL ??
+    process.env.DATABASE_URL;
+
+  if (!connectionString) throw new Error("No database connection string found");
+
+  const pool = new Pool({ connectionString });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const adapter = new PrismaNeon(pool as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
