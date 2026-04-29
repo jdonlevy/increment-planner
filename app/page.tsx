@@ -341,6 +341,10 @@ export default function Home() {
 
   const addPerson = () => {
     if (!newPersonName.trim() || !newPersonTeam) return;
+    const alreadyOnTeam = peopleList.some(
+      p => p.name.toLowerCase() === newPersonName.trim().toLowerCase() && p.teamId === newPersonTeam
+    );
+    if (alreadyOnTeam) return;
     const p: Person = { id: uid(), name: newPersonName.trim(), teamId: newPersonTeam };
     setPeople(prev => ({ ...prev, [p.id]: p }));
     setNewPersonName("");
@@ -744,23 +748,55 @@ export default function Home() {
         <div className="p-6 overflow-y-auto flex-1">
           <div className="max-w-2xl mx-auto space-y-4">
             <h2 className="font-semibold text-slate-800">People</h2>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex gap-3">
-              <input
-                value={newPersonName}
-                onChange={e => setNewPersonName(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && addPerson()}
-                placeholder="Name"
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
-              <select
-                value={newPersonTeam}
-                onChange={e => setNewPersonTeam(e.target.value)}
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-              >
-                <option value="">Select team...</option>
-                {teamList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-              <button onClick={addPerson} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+              <div className="flex gap-3">
+                <div className="flex-1 relative">
+                  <input
+                    value={newPersonName}
+                    onChange={e => { setNewPersonName(e.target.value); }}
+                    onKeyDown={e => e.key === "Enter" && addPerson()}
+                    placeholder="Name"
+                    autoComplete="off"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  {/* Autocomplete dropdown */}
+                  {newPersonName.trim().length > 0 && (() => {
+                    const matches = peopleList
+                      .map(p => p.name)
+                      .filter((name, i, arr) => arr.indexOf(name) === i) // unique names
+                      .filter(name => name.toLowerCase().includes(newPersonName.toLowerCase()) && name.toLowerCase() !== newPersonName.toLowerCase());
+                    if (matches.length === 0) return null;
+                    return (
+                      <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
+                        {matches.map(name => (
+                          <button
+                            key={name}
+                            onMouseDown={e => { e.preventDefault(); setNewPersonName(name); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <select
+                  value={newPersonTeam}
+                  onChange={e => setNewPersonTeam(e.target.value)}
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                >
+                  <option value="">Select team...</option>
+                  {teamList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button onClick={addPerson} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
+              </div>
+              {/* Warn if this name already exists on the selected team */}
+              {newPersonName.trim() && newPersonTeam && peopleList.some(p => p.name.toLowerCase() === newPersonName.trim().toLowerCase() && p.teamId === newPersonTeam) && (
+                <p className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
+                  {newPersonName.trim()} is already in this team
+                </p>
+              )}
             </div>
 
             {teamList.map(team => {
