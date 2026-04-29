@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,66 +44,7 @@ const COLORS = [
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
-// ─── Seed data ────────────────────────────────────────────────────────────────
-
-function seedData() {
-  const r: Record<string, Room>    = {};
-  const t: Record<string, Team>    = {};
-  const p: Record<string, Person>  = {};
-  const s: Record<string, Session> = {};
-
-  const rooms = ["H1", "H5+6", "H9", "H10", "H2", "H3", "Scrum Room"];
-  const rids   = rooms.map(() => uid());
-  rooms.forEach((name, i) => { r[rids[i]] = { id: rids[i], name }; });
-
-  const teamDefs = [
-    { name: "Self Service", roomIdx: 0 },
-    { name: "Radio",        roomIdx: 1 },
-    { name: "Shared",       roomIdx: 2 },
-    { name: "gFIX",         roomIdx: 3 },
-    { name: "Outdoor UK",   roomIdx: 4 },
-    { name: "Outdoor Intl", roomIdx: 5 },
-    { name: "Sales Ops",    roomIdx: 6 },
-  ];
-  const tids = teamDefs.map(() => uid());
-  teamDefs.forEach((td, i) => {
-    t[tids[i]] = { id: tids[i], name: td.name, roomId: rids[td.roomIdx], colorIdx: i % COLORS.length };
-  });
-
-  const peopleDefs: [string, number][] = [
-    ["Alice",0],["Ben",0],["Clara",0],
-    ["Dan",1],["Eva",1],["Frank",1],
-    ["Grace",2],["Harry",2],
-    ["Isla",3],["Jack",3],
-    ["Karen",4],["Leo",4],["Mia",4],
-    ["Noah",5],["Olivia",5],
-    ["Paul",6],["Quinn",6],
-  ];
-  const pids = peopleDefs.map(() => uid());
-  peopleDefs.forEach(([name, ti], i) => {
-    p[pids[i]] = { id: pids[i], name, teamId: tids[ti] };
-  });
-
-  // [name, teamIdx, attendeePidxs]
-  const sessionDefs: [string, number, number[]][] = [
-    ["Sprint Review",       0, [0,1,6,7]],
-    ["Dependency Mapping",  0, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]],
-    ["Partnerships Review", 1, [3,4,14,15]],
-    ["Backlog Refinement",  0, [0,1,2]],
-    ["Architecture Sync",   2, [6,7,8,9]],
-    ["Ireland Roll Out",    5, [13,14]],
-    ["Capacity Planning",   0, [0,1,3,4]],
-    ["Release Planning",    3, [10,11,12]],
-    ["Cross-team Demo",     0, [0,3,6,10,13,15]],
-    ["Risk Review",         6, [6,7,15,16]],
-  ];
-  sessionDefs.forEach(([name, teamIdx, pidxs]) => {
-    const id = uid();
-    s[id] = { id, name, teamId: tids[teamIdx], attendeeIds: pidxs.map(i => pids[i]), notes: "" };
-  });
-
-  return { rooms: r, teams: t, people: p, sessions: s };
-}
+// ─── (Seed data removed) ──────────────────────────────────────────────────────
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -127,10 +68,11 @@ export default function Home() {
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonTeam, setNewPersonTeam] = useState("");
   const [newRoomName,   setNewRoomName]   = useState("");
-  const [saving,        setSaving]        = useState(false);
-  const [saveStatus,    setSaveStatus]    = useState<"idle" | "saved" | "error">("idle");
+  const [saveStatus,  setSaveStatus]  = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [loaded,      setLoaded]      = useState(false);
+  const saveTimer                     = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load from DB if in production, otherwise seed
+  // Load from DB on mount
   useEffect(() => {
     const load = async () => {
       try {
@@ -138,9 +80,9 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           if (data.rooms?.length > 0) {
-            const roomsMap: Record<string, Room> = {};
-            const teamsMap: Record<string, Team> = {};
-            const peopleMap: Record<string, Person> = {};
+            const roomsMap: Record<string, Room>     = {};
+            const teamsMap: Record<string, Team>     = {};
+            const peopleMap: Record<string, Person>  = {};
             const sessionsMap: Record<string, Session> = {};
             data.rooms.forEach((r: Room) => { roomsMap[r.id] = r; });
             data.teams.forEach((t: Team) => { teamsMap[t.id] = t; });
@@ -154,44 +96,44 @@ export default function Home() {
             setSessions(sessionsMap);
             setPlacements(data.placements);
             setBlocked(data.blocked);
-            return;
           }
         }
       } catch {}
-      // Fall back to seed data
-      const seed = seedData();
-      setRooms(seed.rooms);
-      setTeams(seed.teams);
-      setPeople(seed.people);
-      setSessions(seed.sessions);
+      setLoaded(true);
     };
     load();
   }, []);
 
-  const saveToDb = async () => {
-    setSaving(true);
-    setSaveStatus("idle");
-    try {
-      const res = await fetch("/api/schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rooms: Object.values(rooms),
-          teams: Object.values(teams),
-          people: Object.values(people),
-          sessions: Object.values(sessions),
-          placements,
-          blocked,
-        }),
-      });
-      setSaveStatus(res.ok ? "saved" : "error");
-    } catch {
-      setSaveStatus("error");
-    } finally {
-      setSaving(false);
-      setTimeout(() => setSaveStatus("idle"), 3000);
-    }
-  };
+  // Auto-save 1.5s after any state change (debounced), but not on initial load
+  const savePayload = useMemo(() => ({
+    rooms: Object.values(rooms),
+    teams: Object.values(teams),
+    people: Object.values(people),
+    sessions: Object.values(sessions),
+    placements,
+    blocked,
+  }), [rooms, teams, people, sessions, placements, blocked]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSaveStatus("saving");
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(savePayload),
+        });
+        setSaveStatus(res.ok ? "saved" : "error");
+      } catch {
+        setSaveStatus("error");
+      } finally {
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      }
+    }, 1500);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [savePayload, loaded]);
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
@@ -459,17 +401,15 @@ export default function Home() {
               ⚠ {clashCount} person clash{clashCount !== 1 ? "es" : ""}
             </span>
           )}
-          <button
-            onClick={saveToDb}
-            disabled={saving}
-            className={`text-xs font-semibold px-3 py-2 rounded-lg transition-colors border ${
-              saveStatus === "saved" ? "bg-emerald-100 text-emerald-700 border-emerald-300"
-              : saveStatus === "error" ? "bg-red-100 text-red-700 border-red-300"
-              : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
-            }`}
-          >
-            {saving ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : saveStatus === "error" ? "Error" : "Save"}
-          </button>
+          {saveStatus !== "idle" && (
+            <span className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${
+              saveStatus === "saving" ? "text-slate-400"
+              : saveStatus === "saved" ? "text-emerald-600"
+              : "text-red-500"
+            }`}>
+              {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
+            </span>
+          )}
           <button onClick={exportCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors border border-slate-300">
             Export CSV
           </button>
