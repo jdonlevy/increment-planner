@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Room {
+  id         String      @id @default(cuid())
+  name       String
+  createdAt  DateTime    @default(now())
+  teams      Team[]
+  placements Placement[]
+  blocked    Blocked[]
+}
+
+model Team {
+  id         String    @id @default(cuid())
+  name       String
+  colorIdx   Int       @default(0)
+  roomId     String
+  room       Room      @relation(fields: [roomId], references: [id])
+  createdAt  DateTime  @default(now())
+  people     Person[]
+  sessions   Session[]
+}
+
+model Person {
+  id        String   @id @default(cuid())
+  name      String
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id])
+  createdAt DateTime @default(now())
+  sessions  Session[] @relation("SessionAttendees")
+}
+
+model Session {
+  id          String      @id @default(cuid())
+  name        String
+  notes       String      @default("")
+  teamId      String
+  team        Team        @relation(fields: [teamId], references: [id])
+  createdAt   DateTime    @default(now())
+  attendees   Person[]    @relation("SessionAttendees")
+  placements  Placement[]
+}
+
+model Placement {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id])
+  day       String
+  slotIdx   Int
+  createdAt DateTime @default(now())
+
+  @@unique([roomId, day, slotIdx])
+}
+
+model Blocked {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id])
+  day       String
+  slotIdx   Int
+  createdAt DateTime @default(now())
+
+  @@unique([roomId, day, slotIdx])
+}

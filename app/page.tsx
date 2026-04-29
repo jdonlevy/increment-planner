@@ -127,14 +127,71 @@ export default function Home() {
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonTeam, setNewPersonTeam] = useState("");
   const [newRoomName,   setNewRoomName]   = useState("");
+  const [saving,        setSaving]        = useState(false);
+  const [saveStatus,    setSaveStatus]    = useState<"idle" | "saved" | "error">("idle");
 
+  // Load from DB if in production, otherwise seed
   useEffect(() => {
-    const seed = seedData();
-    setRooms(seed.rooms);
-    setTeams(seed.teams);
-    setPeople(seed.people);
-    setSessions(seed.sessions);
+    const load = async () => {
+      try {
+        const res = await fetch("/api/schedule");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.rooms?.length > 0) {
+            const roomsMap: Record<string, Room> = {};
+            const teamsMap: Record<string, Team> = {};
+            const peopleMap: Record<string, Person> = {};
+            const sessionsMap: Record<string, Session> = {};
+            data.rooms.forEach((r: Room) => { roomsMap[r.id] = r; });
+            data.teams.forEach((t: Team) => { teamsMap[t.id] = t; });
+            data.people.forEach((p: Person) => { peopleMap[p.id] = p; });
+            data.sessions.forEach((s: { id: string; name: string; teamId: string; notes: string; attendees: Person[] }) => {
+              sessionsMap[s.id] = { id: s.id, name: s.name, teamId: s.teamId, notes: s.notes, attendeeIds: s.attendees.map((a: Person) => a.id) };
+            });
+            setRooms(roomsMap);
+            setTeams(teamsMap);
+            setPeople(peopleMap);
+            setSessions(sessionsMap);
+            setPlacements(data.placements);
+            setBlocked(data.blocked);
+            return;
+          }
+        }
+      } catch {}
+      // Fall back to seed data
+      const seed = seedData();
+      setRooms(seed.rooms);
+      setTeams(seed.teams);
+      setPeople(seed.people);
+      setSessions(seed.sessions);
+    };
+    load();
   }, []);
+
+  const saveToDb = async () => {
+    setSaving(true);
+    setSaveStatus("idle");
+    try {
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rooms: Object.values(rooms),
+          teams: Object.values(teams),
+          people: Object.values(people),
+          sessions: Object.values(sessions),
+          placements,
+          blocked,
+        }),
+      });
+      setSaveStatus(res.ok ? "saved" : "error");
+    } catch {
+      setSaveStatus("error");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  };
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
@@ -402,6 +459,17 @@ export default function Home() {
               ⚠ {clashCount} person clash{clashCount !== 1 ? "es" : ""}
             </span>
           )}
+          <button
+            onClick={saveToDb}
+            disabled={saving}
+            className={`text-xs font-semibold px-3 py-2 rounded-lg transition-colors border ${
+              saveStatus === "saved" ? "bg-emerald-100 text-emerald-700 border-emerald-300"
+              : saveStatus === "error" ? "bg-red-100 text-red-700 border-red-300"
+              : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+            }`}
+          >
+            {saving ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : saveStatus === "error" ? "Error" : "Save"}
+          </button>
           <button onClick={exportCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors border border-slate-300">
             Export CSV
           </button>
