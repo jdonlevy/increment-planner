@@ -413,7 +413,16 @@ export default function EventPage() {
   // ── Auto-schedule ──
   const autoSchedule = () => {
     if (!event) return;
-    const newPl: Placement[] = [...placements];
+
+    // Remove any placements that are currently involved in a clash
+    const currentClashes = buildClashMap(placements, sessions, people);
+    const clashingIds = new Set(currentClashes.keys());
+    const keptPlacements = placements.filter(p => !clashingIds.has(p.id));
+    const newPl: Placement[] = [...keptPlacements];
+
+    // Schedule: unplaced sessions + those evicted due to clashes
+    const placedSessionIds = new Set(newPl.map(p => p.sessionId));
+    const toPlace = sessions.filter(s => !placedSessionIds.has(s.id));
 
     const personBusy = (pid: string, day: string, slotIdx: number) =>
       newPl.some(pl => {
@@ -425,9 +434,7 @@ export default function EventPage() {
     const isBlk = (roomId: string, day: string, slotIdx: number) =>
       blocked.some(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
 
-    const unplaced = sessions.filter(s => !newPl.some(p => p.sessionId === s.id));
-
-    for (const session of unplaced) {
+    for (const session of toPlace) {
       let placed = false;
       const homeRoomId = teams.find(t => t.id === session.teamId)?.roomId;
       const orderedRooms = homeRoomId
