@@ -410,6 +410,48 @@ export default function EventPage() {
     }
   };
 
+  // ── Auto-schedule ──
+  const autoSchedule = () => {
+    if (!event) return;
+    const newPl: Placement[] = [...placements];
+
+    const personBusy = (pid: string, day: string, slotIdx: number) =>
+      newPl.some(pl => {
+        const s = sessions.find(s => s.id === pl.sessionId);
+        return pl.day === day && pl.slotIdx === slotIdx && s?.attendeeIds.includes(pid);
+      });
+    const roomBusy = (roomId: string, day: string, slotIdx: number) =>
+      newPl.some(pl => pl.roomId === roomId && pl.day === day && pl.slotIdx === slotIdx);
+    const isBlk = (roomId: string, day: string, slotIdx: number) =>
+      blocked.some(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
+
+    const unplaced = sessions.filter(s => !newPl.some(p => p.sessionId === s.id));
+
+    for (const session of unplaced) {
+      let placed = false;
+      const homeRoomId = teams.find(t => t.id === session.teamId)?.roomId;
+      const orderedRooms = homeRoomId
+        ? [rooms.find(r => r.id === homeRoomId)!, ...rooms.filter(r => r.id !== homeRoomId)].filter(Boolean)
+        : rooms;
+
+      for (const day of event.days) {
+        if (placed) break;
+        for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
+          if (placed || LUNCH_SLOT_INDICES.has(slotIdx)) continue;
+          for (const room of orderedRooms) {
+            if (roomBusy(room.id, day, slotIdx)) continue;
+            if (isBlk(room.id, day, slotIdx)) continue;
+            if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
+            newPl.push({ id: uid(), sessionId: session.id, roomId: room.id, day, slotIdx });
+            placed = true;
+            break;
+          }
+        }
+      }
+    }
+    setPlacements(newPl);
+  };
+
   // ── CSV Export ──
   const exportCSV = () => {
     if (!event) return;
@@ -552,6 +594,12 @@ export default function EventPage() {
             }`}>
               {saveStatus === "saved" ? "✓ Saved" : saveStatus === "saving" ? "Saving…" : "Unsaved"}
             </span>
+            <button
+              onClick={() => { if (unplacedSessions.length === 0) { alert("All sessions are already scheduled!"); return; } autoSchedule(); }}
+              className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Auto-Schedule
+            </button>
             <button onClick={exportCSV} className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors">
               Export CSV
             </button>
