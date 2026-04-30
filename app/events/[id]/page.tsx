@@ -234,8 +234,9 @@ export default function EventPage() {
 
   // ── Save state ──
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved">("saved");
-  const loaded      = useRef(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loaded        = useRef(false);
+  const initialCounts = useRef({ sessions: -1, placements: -1, blocked: -1 });
+  const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load ──
   useEffect(() => {
@@ -259,6 +260,11 @@ export default function EventPage() {
       })));
       setPlacements(sched.placements);
       setBlocked(sched.blocked);
+      initialCounts.current = {
+        sessions:   sched.sessions.length,
+        placements: sched.placements.length,
+        blocked:    sched.blocked.length,
+      };
       setLoading(false);
       loaded.current = true;
     };
@@ -271,6 +277,9 @@ export default function EventPage() {
 
   const triggerSave = useCallback(() => {
     if (!loaded.current) return;
+    // Safety guard: never save if we'd be wiping sessions that existed on load
+    const { sessions: initS } = initialCounts.current;
+    if (initS > 0 && schedPayload.sessions.length === 0) return;
     setSaveStatus("unsaved");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
