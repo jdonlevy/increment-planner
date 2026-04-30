@@ -1,1126 +1,263 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+type Event = {
+  id: string;
+  name: string;
+  days: string[];
+  createdAt: string;
+  _count?: { sessions: number };
+};
 
-type Person    = { id: string; name: string; teamId: string };
-type Team      = { id: string; name: string; roomId: string; colorIdx: number };
-type Room      = { id: string; name: string };
-type Session   = { id: string; name: string; teamId: string; attendeeIds: string[]; notes: string };
-type Placement = { id: string; sessionId: string; roomId: string; day: Day; slotIdx: number };
-type Blocked   = { id: string; roomId: string; day: Day; slotIdx: number };
-type Day       = "mon" | "tue" | "thu";
-type Tab       = "schedule" | "sessions" | "people" | "teams" | "rooms";
-type Mode      = "place" | "block";
+function formatDay(dateStr: string) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+function formatDayFull(dateStr: string) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
 
-const DAYS: { key: Day; label: string }[] = [
-  { key: "mon", label: "Monday 18th May" },
-  { key: "tue", label: "Tuesday 19th May" },
-  { key: "thu", label: "Thursday 21st May" },
-];
+// Simple month calendar for picking dates
+function DatePicker({ selected, onChange }: { selected: string[]; onChange: (days: string[]) => void }) {
+  const today = new Date();
+  const [year,  setYear]  = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth());
 
-const SLOTS = [
-  "09:00–10:00", "10:00–11:00", "11:00–12:00",
-  "12:00–13:00", "13:00–14:00", "14:00–15:00",
-  "15:15–16:15", "16:15–17:30",
-];
-const LUNCH_SLOT = 3;
+  const firstDay  = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startOffset = (firstDay + 6) % 7; // Mon=0
 
-const COLORS = [
-  { pill: "bg-blue-500 text-white",    cell: "bg-blue-100 border-blue-400 text-blue-900"       },
-  { pill: "bg-purple-500 text-white",  cell: "bg-purple-100 border-purple-400 text-purple-900" },
-  { pill: "bg-amber-500 text-white",   cell: "bg-amber-100 border-amber-400 text-amber-900"    },
-  { pill: "bg-rose-500 text-white",    cell: "bg-rose-100 border-rose-400 text-rose-900"       },
-  { pill: "bg-emerald-500 text-white", cell: "bg-emerald-100 border-emerald-400 text-emerald-900" },
-  { pill: "bg-cyan-500 text-white",    cell: "bg-cyan-100 border-cyan-400 text-cyan-900"       },
-  { pill: "bg-orange-500 text-white",  cell: "bg-orange-100 border-orange-400 text-orange-900" },
-  { pill: "bg-pink-500 text-white",    cell: "bg-pink-100 border-pink-400 text-pink-900"       },
-  { pill: "bg-teal-500 text-white",    cell: "bg-teal-100 border-teal-400 text-teal-900"       },
-  { pill: "bg-indigo-500 text-white",  cell: "bg-indigo-100 border-indigo-400 text-indigo-900" },
-];
+  const monthLabel = new Date(year, month).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 
-function uid() { return Math.random().toString(36).slice(2, 9); }
+  const prevMonth = () => { if (month === 0) { setMonth(11); setYear(y => y - 1); } else setMonth(m => m - 1); };
+  const nextMonth = () => { if (month === 11) { setMonth(0); setYear(y => y + 1); } else setMonth(m => m + 1); };
 
-// ─── (Seed data removed) ──────────────────────────────────────────────────────
-
-// ─── App ─────────────────────────────────────────────────────────────────────
-
-export default function Home() {
-  const [rooms,      setRooms]      = useState<Record<string, Room>>({});
-  const [teams,      setTeams]      = useState<Record<string, Team>>({});
-  const [people,     setPeople]     = useState<Record<string, Person>>({});
-  const [sessions,   setSessions]   = useState<Record<string, Session>>({});
-  const [placements, setPlacements] = useState<Placement[]>([]);
-  const [blocked,    setBlocked]    = useState<Blocked[]>([]);
-
-  const [tab,         setTab]        = useState<Tab>("schedule");
-  const [activeDay,   setActiveDay]  = useState<Day>("mon");
-  const [mode,        setMode]       = useState<Mode>("place");
-  const [selectedId,  setSelectedId] = useState<string | null>(null);
-  const [editSession, setEditSession] = useState<Partial<Session> & { isNew?: boolean } | null>(null);
-  const [dragId,      setDragId]     = useState<string | null>(null); // sessionId being dragged
-  const [dragFromPl,  setDragFromPl] = useState<string | null>(null); // placementId if from grid
-  const [dragOver,    setDragOver]   = useState<string | null>(null); // "roomId:slotIdx" hover target
-  const [expandedPl,  setExpandedPl] = useState<string | null>(null); // placementId expanded in grid
-
-  const [newPersonName, setNewPersonName] = useState("");
-  const [newPersonTeam, setNewPersonTeam] = useState("");
-  const [newRoomName,   setNewRoomName]   = useState("");
-  const [saveStatus,  setSaveStatus]  = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [loaded,      setLoaded]      = useState(false);
-  const saveTimer                     = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Load from DB on mount
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch("/api/schedule");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.rooms?.length > 0) {
-            const roomsMap: Record<string, Room>     = {};
-            const teamsMap: Record<string, Team>     = {};
-            const peopleMap: Record<string, Person>  = {};
-            const sessionsMap: Record<string, Session> = {};
-            data.rooms.forEach((r: Room) => { roomsMap[r.id] = r; });
-            data.teams.forEach((t: Team) => { teamsMap[t.id] = t; });
-            data.people.forEach((p: Person) => { peopleMap[p.id] = p; });
-            data.sessions.forEach((s: { id: string; name: string; teamId: string; notes: string; attendees: Person[] }) => {
-              sessionsMap[s.id] = { id: s.id, name: s.name, teamId: s.teamId, notes: s.notes, attendeeIds: s.attendees.map((a: Person) => a.id) };
-            });
-            setRooms(roomsMap);
-            setTeams(teamsMap);
-            setPeople(peopleMap);
-            setSessions(sessionsMap);
-            setPlacements(data.placements);
-            setBlocked(data.blocked);
-          }
-        }
-      } catch {}
-      setLoaded(true);
-    };
-    load();
-  }, []);
-
-  // Auto-save 1.5s after any state change (debounced), but not on initial load
-  const savePayload = useMemo(() => ({
-    rooms: Object.values(rooms),
-    teams: Object.values(teams),
-    people: Object.values(people),
-    sessions: Object.values(sessions),
-    placements,
-    blocked,
-  }), [rooms, teams, people, sessions, placements, blocked]);
-
-  useEffect(() => {
-    if (!loaded) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    setSaveStatus("saving");
-    saveTimer.current = setTimeout(async () => {
-      try {
-        const res = await fetch("/api/schedule", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(savePayload),
-        });
-        setSaveStatus(res.ok ? "saved" : "error");
-      } catch {
-        setSaveStatus("error");
-      } finally {
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      }
-    }, 1500);
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [savePayload, loaded]);
-
-  // ── Derived ──────────────────────────────────────────────────────────────
-
-  const placedIds   = new Set(placements.map(p => p.sessionId));
-  const unscheduled = Object.values(sessions).filter(s => !placedIds.has(s.id));
-  const roomList    = Object.values(rooms);
-  const teamList    = Object.values(teams);
-  const peopleList  = Object.values(people);
-
-  // Returns map of placementId -> clashing person names
-  const clashMap = useCallback((): Map<string, string[]> => {
-    const map = new Map<string, string[]>();
-    const grouped: Record<string, Placement[]> = {};
-    placements.forEach(pl => {
-      const key = `${pl.day}:${pl.slotIdx}`;
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(pl);
-    });
-    Object.values(grouped).forEach(group => {
-      if (group.length < 2) return;
-      for (let i = 0; i < group.length; i++) {
-        for (let j = i + 1; j < group.length; j++) {
-          const a = sessions[group[i].sessionId];
-          const b = sessions[group[j].sessionId];
-          if (!a || !b) continue;
-          const clashing = a.attendeeIds
-            .filter(id => b.attendeeIds.includes(id))
-            .map(id => people[id]?.name)
-            .filter(Boolean) as string[];
-          if (clashing.length > 0) {
-            map.set(group[i].id, [...(map.get(group[i].id) ?? []), ...clashing]);
-            map.set(group[j].id, [...(map.get(group[j].id) ?? []), ...clashing]);
-          }
-        }
-      }
-    });
-    return map;
-  }, [placements, sessions, people]);
-
-  const clashData   = clashMap();
-  const clashIds    = new Set(clashData.keys());
-  const clashCount  = clashIds.size;
-  const totalPlaced = placedIds.size;
-
-  // ── Place session ─────────────────────────────────────────────────────────
-
-  const placeSession = (sessionId: string, roomId: string, day: Day, slotIdx: number, fromPlId?: string) => {
-    if (slotIdx === LUNCH_SLOT) return;
-    const isBlocked = blocked.some(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
-    if (isBlocked) return;
-
-    setPlacements(prev => {
-      let next = prev.filter(p => p.sessionId !== sessionId); // remove old placement of this session
-      if (fromPlId) next = next.filter(p => p.id !== fromPlId); // remove source if grid drag
-      const occupant = next.find(p => p.roomId === roomId && p.day === day && p.slotIdx === slotIdx);
-      if (occupant) next = next.filter(p => p.id !== occupant.id); // remove whoever was there
-      next.push({ id: uid(), sessionId, roomId, day, slotIdx });
-      return next;
-    });
+  const toggle = (dateStr: string) => {
+    onChange(selected.includes(dateStr) ? selected.filter(d => d !== dateStr) : [...selected, dateStr].sort());
   };
 
-  const handleCellClick = (roomId: string, day: Day, slotIdx: number) => {
-    if (slotIdx === LUNCH_SLOT) return;
-    if (mode === "block") {
-      const existing = blocked.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
-      if (existing) {
-        setBlocked(prev => prev.filter(b => b.id !== existing.id));
-      } else {
-        // Remove any placed session from this cell first
-        setPlacements(prev => prev.filter(p => !(p.roomId === roomId && p.day === day && p.slotIdx === slotIdx)));
-        setBlocked(prev => [...prev, { id: uid(), roomId, day, slotIdx }]);
-      }
-      return;
-    }
-    if (selectedId) {
-      placeSession(selectedId, roomId, day, slotIdx);
-      setSelectedId(null);
-    }
-  };
-
-  const unplace = (placementId: string) => {
-    setPlacements(prev => prev.filter(p => p.id !== placementId));
-  };
-
-  // ── Drag & Drop ───────────────────────────────────────────────────────────
-
-  const handleDragStart = (sessionId: string, placementId?: string) => {
-    setDragId(sessionId);
-    setDragFromPl(placementId ?? null);
-    setSelectedId(null);
-  };
-
-  const handleDrop = (roomId: string, day: Day, slotIdx: number) => {
-    if (!dragId) return;
-    placeSession(dragId, roomId, day, slotIdx, dragFromPl ?? undefined);
-    setDragId(null);
-    setDragFromPl(null);
-    setDragOver(null);
-  };
-
-  // ── Auto-scheduler ────────────────────────────────────────────────────────
-
-  const autoSchedule = () => {
-    const newPl: Placement[] = [...placements];
-
-    const personBusy = (pid: string, day: Day, slotIdx: number) =>
-      newPl.some(pl => {
-        const s = sessions[pl.sessionId];
-        return pl.day === day && pl.slotIdx === slotIdx && s?.attendeeIds.includes(pid);
-      });
-
-    const roomBusy = (roomId: string, day: Day, slotIdx: number) =>
-      newPl.some(pl => pl.roomId === roomId && pl.day === day && pl.slotIdx === slotIdx);
-
-    const isBlocked = (roomId: string, day: Day, slotIdx: number) =>
-      blocked.some(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
-
-    const unplaced = Object.values(sessions).filter(s => !newPl.some(p => p.sessionId === s.id));
-
-    for (const session of unplaced) {
-      let placed = false;
-      const homeRoom = teams[session.teamId]?.roomId;
-      // Prefer home room, then any room
-      const orderedRooms = homeRoom
-        ? [rooms[homeRoom], ...roomList.filter(r => r.id !== homeRoom)].filter(Boolean)
-        : roomList;
-
-      for (const { key: day } of DAYS) {
-        if (placed) break;
-        for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-          if (placed || slotIdx === LUNCH_SLOT) continue;
-          for (const room of orderedRooms) {
-            if (roomBusy(room.id, day, slotIdx)) continue;
-            if (isBlocked(room.id, day, slotIdx)) continue;
-            if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
-            newPl.push({ id: uid(), sessionId: session.id, roomId: room.id, day, slotIdx });
-            placed = true;
-            break;
-          }
-        }
-      }
-    }
-    setPlacements(newPl);
-  };
-
-  // ── Export CSV ────────────────────────────────────────────────────────────
-
-  const exportCSV = () => {
-    const rows: string[][] = [["Day", "Time", "Room", "Session", "Attendees", "Clash?"]];
-    DAYS.forEach(({ key: day, label }) => {
-      SLOTS.forEach((slot, slotIdx) => {
-        if (slotIdx === LUNCH_SLOT) {
-          rows.push([label, slot, "", "LUNCH", "", ""]);
-          return;
-        }
-        roomList.forEach(room => {
-          const pl = placements.find(p => p.roomId === room.id && p.day === day && p.slotIdx === slotIdx);
-          const bl = blocked.some(b => b.roomId === room.id && b.day === day && b.slotIdx === slotIdx);
-          if (pl) {
-            const session = sessions[pl.sessionId];
-            const attendees = session.attendeeIds.map(id => people[id]?.name).filter(Boolean).join(", ");
-            const isClash = clashIds.has(pl.id) ? "YES" : "";
-            rows.push([label, slot, room.name, session.name, attendees, isClash]);
-          } else if (bl) {
-            rows.push([label, slot, room.name, "UNAVAILABLE", "", ""]);
-          }
-        });
-      });
-    });
-
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = "IP_May_2026_Schedule.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ── Session CRUD ──────────────────────────────────────────────────────────
-
-  const saveSession = () => {
-    if (!editSession?.name?.trim() || !editSession?.teamId) return;
-    const s: Session = {
-      id:          editSession.id ?? uid(),
-      name:        editSession.name.trim(),
-      teamId:      editSession.teamId,
-      attendeeIds: editSession.attendeeIds ?? [],
-      notes:       editSession.notes ?? "",
-    };
-    setSessions(prev => ({ ...prev, [s.id]: s }));
-    setEditSession(null);
-  };
-
-  const deleteSession = (id: string) => {
-    setSessions(prev  => { const n = { ...prev }; delete n[id]; return n; });
-    setPlacements(prev => prev.filter(p => p.sessionId !== id));
-    if (selectedId === id) setSelectedId(null);
-  };
-
-  const toggleAttendee = (personId: string) => {
-    setEditSession(prev => {
-      if (!prev) return prev;
-      const ids = prev.attendeeIds ?? [];
-      return { ...prev, attendeeIds: ids.includes(personId) ? ids.filter(x => x !== personId) : [...ids, personId] };
-    });
-  };
-
-  // ── People CRUD ───────────────────────────────────────────────────────────
-
-  const addPerson = () => {
-    if (!newPersonName.trim() || !newPersonTeam) return;
-    const alreadyOnTeam = peopleList.some(
-      p => p.name.toLowerCase() === newPersonName.trim().toLowerCase() && p.teamId === newPersonTeam
-    );
-    if (alreadyOnTeam) return;
-    const p: Person = { id: uid(), name: newPersonName.trim(), teamId: newPersonTeam };
-    setPeople(prev => ({ ...prev, [p.id]: p }));
-    setNewPersonName("");
-  };
-
-  const deletePerson = (id: string) => {
-    setPeople(prev  => { const n = { ...prev }; delete n[id]; return n; });
-    setSessions(prev => {
-      const n = { ...prev };
-      Object.values(n).forEach(s => { n[s.id] = { ...s, attendeeIds: s.attendeeIds.filter(x => x !== id) }; });
-      return n;
-    });
-  };
-
-  // ── Team CRUD ─────────────────────────────────────────────────────────────
-
-  const [newTeamName,   setNewTeamName]   = useState("");
-  const [newTeamRoom,   setNewTeamRoom]   = useState("");
-  const [editTeam,      setEditTeam]      = useState<Team | null>(null);
-
-  const addTeam = () => {
-    if (!newTeamName.trim()) return;
-    const t: Team = { id: uid(), name: newTeamName.trim(), roomId: newTeamRoom, colorIdx: teamList.length % COLORS.length };
-    setTeams(prev => ({ ...prev, [t.id]: t }));
-    setNewTeamName("");
-    setNewTeamRoom("");
-  };
-
-  const saveTeam = () => {
-    if (!editTeam?.name?.trim()) return;
-    setTeams(prev => ({ ...prev, [editTeam.id]: editTeam }));
-    setEditTeam(null);
-  };
-
-  const deleteTeam = (id: string) => {
-    setTeams(prev => { const n = { ...prev }; delete n[id]; return n; });
-    setPeople(prev => { const n = { ...prev }; Object.values(n).forEach(p => { if (p.teamId === id) delete n[p.id]; }); return n; });
-    setSessions(prev => { const n = { ...prev }; Object.values(n).forEach(s => { if (s.teamId === id) delete n[s.id]; }); return n; });
-  };
-
-  // ── Room CRUD ─────────────────────────────────────────────────────────────
-
-  const addRoom = () => {
-    if (!newRoomName.trim()) return;
-    const r: Room = { id: uid(), name: newRoomName.trim() };
-    setRooms(prev => ({ ...prev, [r.id]: r }));
-    setNewRoomName("");
-  };
-
-  const deleteRoom = (id: string) => {
-    setRooms(prev  => { const n = { ...prev }; delete n[id]; return n; });
-    setPlacements(prev => prev.filter(p => p.roomId !== id));
-    setBlocked(prev    => prev.filter(b => b.roomId !== id));
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render helpers
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const sessionColor = (session: Session) => {
-    const team = teams[session.teamId];
-    return team ? COLORS[team.colorIdx] : COLORS[0];
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+  const cells = Array.from({ length: startOffset + daysInMonth }, (_, i) => {
+    if (i < startOffset) return null;
+    const day = i - startOffset + 1;
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return dateStr;
+  });
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col text-sm select-none">
+    <div className="select-none">
+      <div className="flex items-center justify-between mb-3">
+        <button onClick={prevMonth} className="text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-100 transition-colors">←</button>
+        <span className="text-sm font-semibold text-slate-700">{monthLabel}</span>
+        <button onClick={nextMonth} className="text-slate-500 hover:text-slate-800 px-2 py-1 rounded hover:bg-slate-100 transition-colors">→</button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center mb-1">
+        {["M","T","W","T","F","S","S"].map((d, i) => (
+          <span key={i} className="text-[10px] font-semibold text-slate-400">{d}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((dateStr, i) => {
+          if (!dateStr) return <div key={i} />;
+          const isSelected = selected.includes(dateStr);
+          const isPast = new Date(dateStr + "T00:00:00") < new Date(new Date().toDateString());
+          return (
+            <button
+              key={dateStr}
+              onClick={() => !isPast && toggle(dateStr)}
+              disabled={isPast}
+              className={`text-xs rounded py-1.5 font-medium transition-colors ${
+                isSelected
+                  ? "bg-indigo-600 text-white"
+                  : isPast
+                  ? "text-slate-300 cursor-default"
+                  : "text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
+              }`}
+            >
+              {new Date(dateStr + "T00:00:00").getDate()}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm">
-        <div>
-          <h1 className="text-base font-bold text-slate-900">IP May 2026 — Increment Planner</h1>
-          <p className="text-xs text-slate-400">
-            {totalPlaced}/{Object.keys(sessions).length} sessions scheduled
-            {unscheduled.length > 0 && ` · ${unscheduled.length} unscheduled`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {clashCount > 0 && (
-            <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-semibold">
-              ⚠ {clashCount} person clash{clashCount !== 1 ? "es" : ""}
-            </span>
-          )}
-          {saveStatus !== "idle" && (
-            <span className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${
-              saveStatus === "saving" ? "text-slate-400"
-              : saveStatus === "saved" ? "text-emerald-600"
-              : "text-red-500"
-            }`}>
-              {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
-            </span>
-          )}
-          <button onClick={exportCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors border border-slate-300">
-            Export CSV
-          </button>
-          <button onClick={autoSchedule} className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
-            Auto-Schedule
-          </button>
-          <button onClick={() => { setPlacements([]); setSelectedId(null); }} className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors">
-            Clear
+export default function HomePage() {
+  const router = useRouter();
+  const [events,   setEvents]   = useState<Event[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newName,  setNewName]  = useState("");
+  const [newDays,  setNewDays]  = useState<string[]>([]);
+  const [saving,   setSaving]   = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  useEffect(() => {
+    const init = async () => {
+      // Run migration first to ensure legacy data is assigned to IP MAY 2026
+      await fetch("/api/migrate", { method: "POST" });
+      const res = await fetch("/api/events");
+      if (res.ok) setEvents(await res.json());
+      setLoading(false);
+    };
+    init();
+  }, []);
+
+  const createEvent = async () => {
+    if (!newName.trim() || newDays.length === 0) return;
+    setSaving(true);
+    const res = await fetch("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName.trim(), days: newDays }),
+    });
+    if (res.ok) {
+      const event = await res.json();
+      setEvents(prev => [...prev, { ...event, _count: { sessions: 0 } }]);
+      setCreating(false);
+      setNewName("");
+      setNewDays([]);
+      router.push(`/events/${event.id}`);
+    }
+    setSaving(false);
+  };
+
+  const deleteEvent = async (id: string) => {
+    setDeleting(id);
+    await fetch(`/api/events/${id}`, { method: "DELETE" });
+    setEvents(prev => prev.filter(e => e.id !== id));
+    setDeleting(null);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100">
+      <header className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">Increment Planner</h1>
+            <p className="text-xs text-slate-400">Manage your planning events</p>
+          </div>
+          <button
+            onClick={() => setCreating(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+          >
+            + New Event
           </button>
         </div>
       </header>
 
-      {/* Nav */}
-      <nav className="bg-white border-b border-slate-200 px-6 flex gap-1">
-        {(["schedule","sessions","people","teams","rooms"] as Tab[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2.5 text-xs font-medium capitalize border-b-2 transition-colors ${
-              tab === t ? "border-indigo-500 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {t === "sessions" ? `Sessions (${Object.keys(sessions).length})`
-              : t === "people" ? `People (${Object.keys(people).length})`
-              : t === "teams"  ? `Teams (${Object.keys(teams).length})`
-              : t === "rooms"  ? `Rooms (${Object.keys(rooms).length})`
-              : "Schedule"}
-          </button>
-        ))}
-      </nav>
-
-      {/* ── SCHEDULE TAB ── */}
-      {tab === "schedule" && (
-        <div className="flex flex-1 overflow-hidden">
-
-          {/* Sidebar – unscheduled sessions */}
-          <aside className="w-52 bg-white border-r border-slate-200 flex flex-col">
-            <div className="p-3 border-b border-slate-100 flex items-center justify-between">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                Unscheduled ({unscheduled.length})
-              </p>
-            </div>
-
-            {/* Mode toggle */}
-            <div className="p-2 border-b border-slate-100 flex gap-1">
-              <button
-                onClick={() => setMode("place")}
-                className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors ${
-                  mode === "place" ? "bg-indigo-100 text-indigo-700" : "text-slate-500 hover:bg-slate-100"
-                }`}
+      <main className="max-w-4xl mx-auto px-6 py-8">
+        {loading ? (
+          <div className="flex items-center justify-center py-24">
+            <p className="text-slate-400 text-sm">Loading events...</p>
+          </div>
+        ) : events.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="text-4xl mb-4">📅</div>
+            <h2 className="text-lg font-semibold text-slate-700 mb-2">No events yet</h2>
+            <p className="text-slate-400 text-sm mb-6">Create your first planning event to get started</p>
+            <button
+              onClick={() => setCreating(true)}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors"
+            >
+              + New Event
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {events.map(event => (
+              <div
+                key={event.id}
+                className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all group cursor-pointer"
+                onClick={() => router.push(`/events/${event.id}`)}
               >
-                Place
-              </button>
-              <button
-                onClick={() => { setMode("block"); setSelectedId(null); }}
-                className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors ${
-                  mode === "block" ? "bg-red-100 text-red-700" : "text-slate-500 hover:bg-slate-100"
-                }`}
-              >
-                Block Slots
-              </button>
-            </div>
+                <div className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <h2 className="font-bold text-slate-900 text-base group-hover:text-indigo-600 transition-colors">
+                      {event.name}
+                    </h2>
+                    <button
+                      onClick={e => { e.stopPropagation(); if (confirm(`Delete "${event.name}"?`)) deleteEvent(event.id); }}
+                      className="text-slate-300 hover:text-red-500 text-xs transition-colors opacity-0 group-hover:opacity-100 ml-2"
+                    >
+                      {deleting === event.id ? "..." : "✕"}
+                    </button>
+                  </div>
 
-            {mode === "block" && (
-              <div className="px-3 py-2 bg-red-50 border-b border-red-100">
-                <p className="text-xs text-red-600">Click any cell to mark it unavailable. Click again to unblock.</p>
-              </div>
-            )}
-
-            <div className="p-2 space-y-1.5 flex-1 overflow-y-auto">
-              {unscheduled.length === 0 && (
-                <p className="text-xs text-slate-400 italic px-1 pt-2">All sessions placed</p>
-              )}
-              {unscheduled.map(session => {
-                const isSelected = selectedId === session.id;
-                const isSidebarExpanded = expandedPl === `sidebar-${session.id}`;
-                const color = sessionColor(session);
-                return (
-                  <div
-                    key={session.id}
-                    draggable
-                    onDragStart={() => { handleDragStart(session.id); setSelectedId(null); }}
-                    onDragEnd={() => { setDragId(null); setDragFromPl(null); setDragOver(null); }}
-                    className={`rounded-lg px-3 py-2 border-2 transition-all ${
-                      isSelected
-                        ? "border-indigo-500 bg-indigo-50 cursor-grab active:cursor-grabbing"
-                        : "border-slate-200 hover:border-indigo-300 bg-slate-50 cursor-grab active:cursor-grabbing"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-1">
-                      <p
-                        onClick={() => mode === "place" && setSelectedId(isSelected ? null : session.id)}
-                        className="font-medium text-slate-800 text-xs leading-tight flex-1 cursor-pointer"
-                      >{session.name}</p>
-                      <button
-                        onMouseDown={e => e.stopPropagation()}
-                        onClick={e => { e.stopPropagation(); setExpandedPl(isSidebarExpanded ? null : `sidebar-${session.id}`); }}
-                        className="text-slate-400 hover:text-indigo-500 text-xs leading-none shrink-0"
-                      >{isSidebarExpanded ? "▲" : "▼"}</button>
-                    </div>
-                    <p className="text-slate-400 text-xs mt-0.5">
-                      {session.attendeeIds.length} attendee{session.attendeeIds.length !== 1 ? "s" : ""}
-                    </p>
-                    {isSelected && <p className="text-indigo-500 text-xs font-medium mt-1">→ click or drag a cell</p>}
-                    {isSidebarExpanded && (
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-200 flex flex-wrap gap-1">
-                        {session.attendeeIds.map(pid => {
-                          const person = people[pid];
-                          if (!person) return null;
-                          const team = teams[person.teamId];
-                          const c = team ? COLORS[team.colorIdx] : COLORS[0];
-                          return (
-                            <span key={pid} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${c.pill}`}>
-                              {person.name}
-                            </span>
-                          );
-                        })}
+                  <div className="space-y-1 mb-4">
+                    {event.days.slice(0, 4).map(d => (
+                      <div key={d} className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                        <span className="text-xs text-slate-500">{formatDayFull(d)}</span>
                       </div>
+                    ))}
+                    {event.days.length > 4 && (
+                      <p className="text-xs text-slate-400 pl-3.5">+{event.days.length - 4} more days</p>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          </aside>
 
-          {/* Grid */}
-          <main className="flex-1 overflow-auto p-4">
-            {/* Day tabs */}
-            <div className="flex gap-1 mb-4">
-              {DAYS.map(d => (
-                <button
-                  key={d.key}
-                  onClick={() => setActiveDay(d.key)}
-                  className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                    activeDay === d.key
-                      ? "bg-indigo-600 text-white"
-                      : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
-                  }`}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-
-            {selectedId && mode === "place" && (
-              <div className="mb-3 bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-2 text-xs text-indigo-700 font-medium">
-                Session selected — click a cell or drag it to place.
-              </div>
-            )}
-            {clashCount > 0 && (
-              <div className="mb-3 bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-700">
-                ⚠ <strong>{clashCount} placement{clashCount !== 1 ? "s" : ""}</strong> have person clashes — hover a session and click ▼ to see who's double-booked.
-              </div>
-            )}
-
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="w-28 px-3 py-2 text-xs font-semibold text-slate-500 text-left">Time</th>
-                    {roomList.map(room => (
-                      <th key={room.id} className="px-2 py-2 text-xs font-semibold text-slate-700 text-center min-w-36">
-                        {room.name}
-                        <span className="block text-slate-400 font-normal text-[10px]">
-                          {teamList.find(t => t.roomId === room.id)?.name ?? ""}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {SLOTS.map((slot, slotIdx) => {
-                    const isLunch = slotIdx === LUNCH_SLOT;
-                    return (
-                      <tr key={slotIdx} className="border-b border-slate-100 last:border-0">
-                        <td className="px-3 py-1.5 text-xs font-mono text-slate-400 whitespace-nowrap align-middle">
-                          {slot}
-                          {isLunch && <span className="ml-1 text-slate-300 text-[10px]">lunch</span>}
-                        </td>
-                        {roomList.map(room => {
-                          if (isLunch) {
-                            return (
-                              <td key={room.id} className="border-l border-slate-100 px-2 py-1 text-center bg-slate-50">
-                                <span className="text-xs text-slate-300 italic">lunch</span>
-                              </td>
-                            );
-                          }
-
-                          const placement   = placements.find(p => p.roomId === room.id && p.day === activeDay && p.slotIdx === slotIdx);
-                          const session     = placement ? sessions[placement.sessionId] : null;
-                          const isBlockedCell = blocked.some(b => b.roomId === room.id && b.day === activeDay && b.slotIdx === slotIdx);
-                          const isClash       = placement ? clashIds.has(placement.id) : false;
-                          const clashPeople   = placement ? (clashData.get(placement.id) ?? []) : [];
-                          const isExpanded    = placement ? expandedPl === placement.id : false;
-                          const color       = session ? sessionColor(session) : COLORS[0];
-                          const dropKey     = `${room.id}:${slotIdx}`;
-                          const isDragTarget = dragOver === dropKey;
-
-                          if (isBlockedCell && !session) {
-                            return (
-                              <td
-                                key={room.id}
-                                onClick={() => handleCellClick(room.id, activeDay, slotIdx)}
-                                className="border-l border-slate-100 px-2 py-1.5 cursor-pointer"
-                                title="Click to unblock"
-                              >
-                                <div className="h-14 rounded bg-slate-200 flex items-center justify-center">
-                                  <span className="text-xs text-slate-500 font-medium">Unavailable</span>
-                                </div>
-                              </td>
-                            );
-                          }
-
-                          return (
-                            <td
-                              key={room.id}
-                              onClick={() => !session && handleCellClick(room.id, activeDay, slotIdx)}
-                              onDragOver={e => { e.preventDefault(); setDragOver(dropKey); }}
-                              onDragLeave={() => setDragOver(null)}
-                              onDrop={e => { e.preventDefault(); handleDrop(room.id, activeDay, slotIdx); }}
-                              className={`border-l border-slate-100 px-2 py-1.5 transition-colors ${
-                                session ? "cursor-default"
-                                : mode === "block" ? "cursor-pointer"
-                                : selectedId || dragId ? "cursor-pointer" : "cursor-default"
-                              } ${isDragTarget && !session ? "bg-indigo-50" : ""}`}
-                            >
-                              {session ? (
-                                <div
-                                  draggable
-                                  onDragStart={() => handleDragStart(session.id, placement!.id)}
-                                  onDragEnd={() => { setDragId(null); setDragFromPl(null); setDragOver(null); }}
-                                  className={`rounded-lg px-2 py-1.5 border-2 cursor-grab active:cursor-grabbing ${
-                                    isClash ? "bg-red-50 border-red-400" : `${color.cell} border-transparent`
-                                  } ${isDragTarget ? "opacity-50" : ""}`}
-                                >
-                                  <div className="flex items-start justify-between gap-1">
-                                    <p className="font-semibold text-xs leading-tight">{session.name}</p>
-                                    <div className="flex gap-1 shrink-0">
-                                      <button
-                                        onMouseDown={e => e.stopPropagation()}
-                                        onClick={e => { e.stopPropagation(); setExpandedPl(isExpanded ? null : placement!.id); }}
-                                        className="text-slate-400 hover:text-indigo-500 text-xs leading-none"
-                                        title={isExpanded ? "Collapse" : "Show attendees"}
-                                      >{isExpanded ? "▲" : "▼"}</button>
-                                      <button
-                                        onMouseDown={e => e.stopPropagation()}
-                                        onClick={e => { e.stopPropagation(); unplace(placement!.id); }}
-                                        className="text-slate-400 hover:text-red-500 text-xs leading-none"
-                                      >✕</button>
-                                    </div>
-                                  </div>
-                                  <p className="text-[10px] text-slate-500 mt-0.5">
-                                    {session.attendeeIds.length} people
-                                  </p>
-                                  {isClash && (
-                                    <p className="text-[10px] text-red-600 font-semibold mt-0.5">
-                                      ⚠ Clash: {[...new Set(clashPeople)].join(", ")}
-                                    </p>
-                                  )}
-                                  {isExpanded && (
-                                    <div className="mt-1.5 pt-1.5 border-t border-black/10 flex flex-wrap gap-1">
-                                      {session.attendeeIds.map(pid => {
-                                        const person = people[pid];
-                                        if (!person) return null;
-                                        const isClashing = clashPeople.includes(person.name);
-                                        return (
-                                          <span
-                                            key={pid}
-                                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                                              isClashing ? "bg-red-200 text-red-800" : "bg-black/10 text-current"
-                                            }`}
-                                          >
-                                            {person.name}
-                                          </span>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div
-                                  className={`h-14 rounded border border-dashed transition-colors ${
-                                    isDragTarget
-                                      ? "border-indigo-400 bg-indigo-50"
-                                      : mode === "block"
-                                      ? "border-red-200 hover:bg-red-50"
-                                      : selectedId || dragId
-                                      ? "border-indigo-200 hover:bg-indigo-50/40"
-                                      : "border-slate-200"
-                                  }`}
-                                />
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </main>
-        </div>
-      )}
-
-      {/* ── SESSIONS TAB ── */}
-      {tab === "sessions" && (
-        <div className="flex-1 p-6 overflow-y-auto">
-          <div className="max-w-3xl mx-auto space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-slate-800">Sessions</h2>
-              <button
-                onClick={() => setEditSession({ isNew: true, attendeeIds: [], notes: "" })}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
-              >
-                + Add Session
-              </button>
-            </div>
-
-            {Object.values(sessions).map(session => {
-              const placement = placements.find(p => p.sessionId === session.id);
-              const isClash   = placement ? clashIds.has(placement.id) : false;
-              const attendees = session.attendeeIds.map(id => people[id]).filter(Boolean);
-              return (
-                <div key={session.id} className={`bg-white rounded-xl border shadow-sm p-4 ${isClash ? "border-red-300" : "border-slate-200"}`}>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-semibold text-slate-900">{session.name}</h3>
-                        {(() => { const t = teams[session.teamId]; return t ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${COLORS[t.colorIdx].pill}`}>{t.name}</span> : null; })()}
-                        {placement ? (
-                          <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-0.5 rounded-full font-medium">
-                            {DAYS.find(d => d.key === placement.day)?.label} · {SLOTS[placement.slotIdx]} · {rooms[placement.roomId]?.name}
-                          </span>
-                        ) : (
-                          <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-medium">Unscheduled</span>
-                        )}
-                        {isClash && <span className="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full font-semibold">⚠ Clash</span>}
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 mt-2">
-                        {attendees.length === 0 && <span className="text-xs text-slate-400 italic">No attendees</span>}
-                        {attendees.map(person => {
-                          const team  = teams[person.teamId];
-                          const color = team ? COLORS[team.colorIdx] : COLORS[0];
-                          return <span key={person.id} className={`text-xs px-2 py-0.5 rounded-full font-medium ${color.pill}`}>{person.name}</span>;
-                        })}
-                      </div>
-                      {session.notes && <p className="text-xs text-slate-500 mt-1.5 italic">{session.notes}</p>}
-                    </div>
-                    <div className="flex gap-1 ml-4">
-                      <button onClick={() => setEditSession({ ...session })} className="text-xs text-slate-400 hover:text-indigo-600 px-2 py-1 rounded hover:bg-indigo-50 transition-colors">Edit</button>
-                      <button onClick={() => deleteSession(session.id)} className="text-xs text-slate-400 hover:text-red-500 px-2 py-1 rounded hover:bg-red-50 transition-colors">Delete</button>
-                    </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                    <span className="text-xs text-slate-400">
+                      {event._count?.sessions ?? 0} session{(event._count?.sessions ?? 0) !== 1 ? "s" : ""}
+                    </span>
+                    <span className="text-xs font-semibold text-indigo-600 group-hover:underline">
+                      Open →
+                    </span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── PEOPLE TAB ── */}
-      {tab === "people" && (
-        <div className="p-6 overflow-y-auto flex-1">
-          <div className="max-w-2xl mx-auto space-y-4">
-            <h2 className="font-semibold text-slate-800">People</h2>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
-              <div className="flex gap-3">
-                <div className="flex-1 relative">
-                  <input
-                    value={newPersonName}
-                    onChange={e => { setNewPersonName(e.target.value); }}
-                    onKeyDown={e => e.key === "Enter" && addPerson()}
-                    placeholder="Name"
-                    autoComplete="off"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                  {/* Autocomplete dropdown */}
-                  {newPersonName.trim().length > 0 && (() => {
-                    const matches = peopleList
-                      .map(p => p.name)
-                      .filter((name, i, arr) => arr.indexOf(name) === i) // unique names
-                      .filter(name => name.toLowerCase().includes(newPersonName.toLowerCase()) && name.toLowerCase() !== newPersonName.toLowerCase());
-                    if (matches.length === 0) return null;
-                    return (
-                      <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
-                        {matches.map(name => (
-                          <button
-                            key={name}
-                            onMouseDown={e => { e.preventDefault(); setNewPersonName(name); }}
-                            className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
-                          >
-                            {name}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-                <select
-                  value={newPersonTeam}
-                  onChange={e => setNewPersonTeam(e.target.value)}
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-                >
-                  <option value="">Select team...</option>
-                  {teamList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-                <button onClick={addPerson} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
               </div>
-              {/* Warn if this name already exists on the selected team */}
-              {newPersonName.trim() && newPersonTeam && peopleList.some(p => p.name.toLowerCase() === newPersonName.trim().toLowerCase() && p.teamId === newPersonTeam) && (
-                <p className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
-                  {newPersonName.trim()} is already in this team
-                </p>
-              )}
-            </div>
-
-            {teamList.map(team => {
-              const members = peopleList.filter(p => p.teamId === team.id);
-              const color   = COLORS[team.colorIdx];
-              return (
-                <div key={team.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${color.pill} inline-block mb-3`}>{team.name}</span>
-                  <div className="flex flex-wrap gap-2">
-                    {members.length === 0 && <span className="text-xs text-slate-400 italic">No members</span>}
-                    {members.map(person => (
-                      <div key={person.id} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${color.cell} border`}>
-                        {person.name}
-                        <button onClick={() => deletePerson(person.id)} className="text-slate-400 hover:text-red-500 transition-colors leading-none">✕</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+            ))}
           </div>
-        </div>
-      )}
+        )}
+      </main>
 
-      {/* ── TEAMS TAB ── */}
-      {tab === "teams" && (
-        <div className="p-6 overflow-y-auto flex-1">
-          <div className="max-w-2xl mx-auto space-y-4">
-            <h2 className="font-semibold text-slate-800">Teams</h2>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
-              <div className="flex gap-3">
-                <input
-                  value={newTeamName}
-                  onChange={e => setNewTeamName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && addTeam()}
-                  placeholder="Team name (e.g. Radio)"
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                />
-                <select
-                  value={newTeamRoom}
-                  onChange={e => setNewTeamRoom(e.target.value)}
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-                >
-                  <option value="">No room assigned</option>
-                  {roomList.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-                <button onClick={addTeam} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
-              </div>
-              {roomList.length === 0 && (
-                <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">Add rooms first so you can assign them to teams</p>
-              )}
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100">
-              {teamList.length === 0 && <p className="p-4 text-xs text-slate-400 italic">No teams added yet</p>}
-              {teamList.map(team => {
-                const color = COLORS[team.colorIdx];
-                const homeRoom = rooms[team.roomId];
-                const memberCount = peopleList.filter(p => p.teamId === team.id).length;
-                return (
-                  <div key={team.id} className="flex items-center justify-between px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${color.pill}`}>{team.name}</span>
-                      <span className="text-xs text-slate-500">
-                        {homeRoom ? `Room: ${homeRoom.name}` : <span className="text-amber-500">No room assigned</span>}
-                      </span>
-                      <span className="text-xs text-slate-400">{memberCount} member{memberCount !== 1 ? "s" : ""}</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setEditTeam(team)} className="text-xs text-slate-400 hover:text-indigo-600 px-2 py-1 rounded hover:bg-indigo-50 transition-colors">Edit</button>
-                      <button onClick={() => deleteTeam(team.id)} className="text-xs text-slate-400 hover:text-red-500 px-2 py-1 rounded hover:bg-red-50 transition-colors">Delete</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── ROOMS TAB ── */}
-      {tab === "rooms" && (
-        <div className="p-6 overflow-y-auto flex-1">
-          <div className="max-w-xl mx-auto space-y-4">
-            <h2 className="font-semibold text-slate-800">Rooms</h2>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex gap-3">
-              <input
-                value={newRoomName}
-                onChange={e => setNewRoomName(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && addRoom()}
-                placeholder="Room name (e.g. H1)"
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
-              <button onClick={addRoom} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">Add</button>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100">
-              {roomList.length === 0 && <p className="p-4 text-xs text-slate-400 italic">No rooms added</p>}
-              {roomList.map(room => {
-                const ownerTeam = teamList.find(t => t.roomId === room.id);
-                return (
-                  <div key={room.id} className="flex items-center justify-between px-4 py-3">
-                    <div>
-                      <span className="font-medium text-slate-800">{room.name}</span>
-                      {ownerTeam && (
-                        <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${COLORS[ownerTeam.colorIdx].pill}`}>
-                          {ownerTeam.name}
-                        </span>
-                      )}
-                    </div>
-                    <button onClick={() => deleteRoom(room.id)} className="text-slate-400 hover:text-red-500 text-xs transition-colors">Delete</button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── TEAM EDIT MODAL ── */}
-      {editTeam && (
+      {/* Create event modal */}
+      {creating && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h2 className="font-semibold text-slate-900">Edit Team</h2>
-              <button onClick={() => setEditTeam(null)} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
+              <h2 className="font-semibold text-slate-900">New Planning Event</h2>
+              <button onClick={() => { setCreating(false); setNewName(""); setNewDays([]); }} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-5 overflow-y-auto flex-1">
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Team name</label>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Event name</label>
                 <input
-                  value={editTeam.name}
-                  onChange={e => setEditTeam(prev => prev ? { ...prev, name: e.target.value } : prev)}
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  placeholder="e.g. IP August 2026"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Home room</label>
-                <select
-                  value={editTeam.roomId}
-                  onChange={e => setEditTeam(prev => prev ? { ...prev, roomId: e.target.value } : prev)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-                >
-                  <option value="">No room assigned</option>
-                  {roomList.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">Auto-scheduler places this team's sessions here first</p>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-2">Colour</label>
-                <div className="flex gap-2 flex-wrap">
-                  {COLORS.map((c, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setEditTeam(prev => prev ? { ...prev, colorIdx: i } : prev)}
-                      className={`w-6 h-6 rounded-full ${c.pill.split(" ")[0]} border-2 transition-all ${editTeam.colorIdx === i ? "border-slate-800 scale-110" : "border-transparent"}`}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-2">
-              <button onClick={() => setEditTeam(null)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
-              <button
-                onClick={saveTeam}
-                disabled={!editTeam.name.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── SESSION EDIT MODAL ── */}
-      {editSession && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h2 className="font-semibold text-slate-900">{editSession.isNew ? "New Session" : "Edit Session"}</h2>
-              <button onClick={() => setEditSession(null)} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
-            </div>
-            <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Session name</label>
-                <input
-                  value={editSession.name ?? ""}
-                  onChange={e => setEditSession(p => ({ ...p!, name: e.target.value }))}
-                  placeholder="e.g. Sprint Review"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Owning team <span className="text-red-400">*</span></label>
-                <select
-                  value={editSession.teamId ?? ""}
-                  onChange={e => setEditSession(p => ({ ...p!, teamId: e.target.value }))}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-                >
-                  <option value="">Select team...</option>
-                  {teamList.map(t => (
-                    <option key={t.id} value={t.id}>{t.name} (home room: {rooms[t.roomId]?.name ?? "none"})</option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">Session will be scheduled in this team's home room by default</p>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Notes (optional)</label>
-                <input
-                  value={editSession.notes ?? ""}
-                  onChange={e => setEditSession(p => ({ ...p!, notes: e.target.value }))}
-                  placeholder="Any notes..."
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-2">
-                  Attendees ({(editSession.attendeeIds ?? []).length} selected)
+                  Select days <span className="text-slate-400">({newDays.length} selected)</span>
                 </label>
-                <div className="space-y-3">
-                  {teamList.map(team => {
-                    const members = peopleList.filter(p => p.teamId === team.id);
-                    if (members.length === 0) return null;
-                    const color = COLORS[team.colorIdx];
-                    return (
-                      <div key={team.id}>
-                        <p className={`text-xs font-semibold mb-1.5 px-2 py-0.5 rounded-full inline-block ${color.pill}`}>{team.name}</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {members.map(person => {
-                            const checked = (editSession.attendeeIds ?? []).includes(person.id);
-                            return (
-                              <button
-                                key={person.id}
-                                onClick={() => toggleAttendee(person.id)}
-                                className={`text-xs px-2.5 py-1 rounded-full font-medium border-2 transition-all ${
-                                  checked ? `${color.pill} border-transparent` : "border-slate-200 text-slate-600 hover:border-slate-400"
-                                }`}
-                              >
-                                {person.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <DatePicker selected={newDays} onChange={setNewDays} />
+                {newDays.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {newDays.map(d => (
+                      <span key={d} className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-full font-medium">
+                        {formatDay(d)}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-2">
-              <button onClick={() => setEditSession(null)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
+              <button onClick={() => { setCreating(false); setNewName(""); setNewDays([]); }} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
               <button
-                onClick={saveSession}
-                disabled={!editSession.name?.trim() || !editSession.teamId}
+                onClick={createEvent}
+                disabled={!newName.trim() || newDays.length === 0 || saving}
                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
               >
-                Save Session
+                {saving ? "Creating..." : "Create Event"}
               </button>
             </div>
           </div>
