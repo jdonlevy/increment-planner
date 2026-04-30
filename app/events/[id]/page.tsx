@@ -11,7 +11,8 @@ type Person  = { id: string; name: string; teamId: string };
 type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
-type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string };
+type EventBreak = { label: string; from: string; to: string };
+type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string; breaks: EventBreak[] };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -246,10 +247,15 @@ export default function EventPage() {
   const [editLunchEnd,      setEditLunchEnd]      = useState("13:00");
   const [editLunchLabel,    setEditLunchLabel]    = useState("Lunch Break");
   const [editHasLunch,      setEditHasLunch]      = useState(true);
+  const [editBreaks,        setEditBreaks]        = useState<EventBreak[]>([]);
+  const [newBreakLabel,     setNewBreakLabel]     = useState("");
+  const [newBreakFrom,      setNewBreakFrom]      = useState("10:30");
+  const [newBreakTo,        setNewBreakTo]        = useState("11:00");
   const [savingSlots,       setSavingSlots]       = useState(false);
 
   // ── Drag state ──
   const draggingSessionId = useRef<string | null>(null);
+  const draggingBlockedId = useRef<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<{ roomId: string; day: string; slotIdx: number } | null>(null);
 
   // ── Save state ──
@@ -317,6 +323,15 @@ export default function EventPage() {
   // ── Derived ──
   const activeSlots        = useMemo(() => event?.slots?.length      ? event.slots      : SLOTS,                          [event]);
   const activeLunchIndices = useMemo(() => event?.lunchSlots?.length ? new Set(event.lunchSlots) : LUNCH_SLOT_INDICES, [event]);
+  const activeBreaks       = useMemo(() => (event?.breaks ?? []).map(b => ({
+    ...b,
+    slotIndices: new Set(activeSlots.map((s, i) => (s >= b.from && s < b.to ? i : -1)).filter(i => i >= 0)),
+  })), [event, activeSlots]);
+  const allBlockedIndices  = useMemo(() => {
+    const s = new Set(activeLunchIndices);
+    for (const b of activeBreaks) b.slotIndices.forEach(i => s.add(i));
+    return s;
+  }, [activeLunchIndices, activeBreaks]);
   const clashMap           = useMemo(() => buildClashMap(placements, sessions, people), [placements, sessions, people]);
 
   const teamOf    = (id: string) => teams.find(t => t.id === id);
@@ -325,6 +340,8 @@ export default function EventPage() {
     placements.find(p => p.roomId === roomId && p.day === day && p.slotIdx === slotIdx);
   const isBlockedCell = (roomId: string, day: string, slotIdx: number) =>
     blocked.some(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
+  const blockedAt = (roomId: string, day: string, slotIdx: number) =>
+    blocked.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
 
   const unplacedSessions = sessions.filter(s => !placements.some(p => p.sessionId === s.id));
 
@@ -394,8 +411,25 @@ export default function EventPage() {
 
   // ── Drag & drop ──
   const handleDrop = (roomId: string, day: string, slotIdx: number) => {
+    if (allBlockedIndices.has(slotIdx)) return;
+
+    // Moving a blocked slot
+    const bId = draggingBlockedId.current;
+    if (bId) {
+      if (!placementAt(roomId, day, slotIdx) && !isBlockedCell(roomId, day, slotIdx)) {
+        setBlocked(prev => [
+          ...prev.filter(b => b.id !== bId),
+          { id: uid(), roomId, day, slotIdx },
+        ]);
+      }
+      draggingBlockedId.current = null;
+      setDragOverCell(null);
+      return;
+    }
+
+    // Moving a session
     const id = draggingSessionId.current;
-    if (!id || isBlockedCell(roomId, day, slotIdx) || activeLunchIndices.has(slotIdx)) return;
+    if (!id || isBlockedCell(roomId, day, slotIdx)) return;
     setPlacements(prev => [
       ...prev.filter(p => p.sessionId !== id && !(p.roomId === roomId && p.day === day && p.slotIdx === slotIdx)),
       { id: uid(), sessionId: id, roomId, day, slotIdx },
@@ -409,7 +443,7 @@ export default function EventPage() {
   };
 
   const toggleBlocked = (roomId: string, day: string, slotIdx: number) => {
-    if (placementAt(roomId, day, slotIdx) || activeLunchIndices.has(slotIdx)) return;
+    if (placementAt(roomId, day, slotIdx) || allBlockedIndices.has(slotIdx)) return;
     setBlocked(prev => {
       const exists = prev.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
       if (exists) return prev.filter(b => b.id !== exists.id);
@@ -484,7 +518,7 @@ export default function EventPage() {
         for (const day of event.days) {
           if (placed) break;
           for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
-            if (activeLunchIndices.has(slotIdx)) continue;
+            if (allBlockedIndices.has(slotIdx)) continue;
             if (roomBusy(room.id, day, slotIdx)) continue;
             if (isBlk(room.id, day, slotIdx)) continue;
             if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
@@ -504,7 +538,7 @@ export default function EventPage() {
     const rows = [["Day", "Time", "Room", "Session", "Team", "Attendees", "Notes"]];
     for (const day of event.days) {
       for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
-        if (activeLunchIndices.has(slotIdx)) continue;
+        if (allBlockedIndices.has(slotIdx)) continue;
         for (const room of rooms) {
           const p = placementAt(room.id, day, slotIdx);
           if (!p) continue;
@@ -561,6 +595,7 @@ export default function EventPage() {
       html += `</tr></thead><tbody>`;
 
       let lunchRendered = false;
+      const renderedBreaksPdf = new Set<string>();
       for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
         if (activeLunchIndices.has(slotIdx)) {
           if (!lunchRendered) {
@@ -570,6 +605,14 @@ export default function EventPage() {
             const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
             html += `<tr><td class="time-cell">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell">${event?.lunchLabel ?? "Lunch Break"} (${lunchStart}–${lunchEnd})</td></tr>`;
             lunchRendered = true;
+          }
+          continue;
+        }
+        const breakMatch = activeBreaks.find(b => b.slotIndices.has(slotIdx));
+        if (breakMatch) {
+          if (!renderedBreaksPdf.has(breakMatch.label)) {
+            html += `<tr><td class="time-cell">${breakMatch.from}</td><td colspan="${rooms.length}" class="lunch-cell">${breakMatch.label} (${breakMatch.from}–${breakMatch.to})</td></tr>`;
+            renderedBreaksPdf.add(breakMatch.label);
           }
           continue;
         }
@@ -663,6 +706,8 @@ export default function EventPage() {
                   setEditLunchEnd(`${String(Math.floor(endMins/60)).padStart(2,"0")}:${String(endMins%60).padStart(2,"0")}`);
                 }
                 setEditLunchLabel(event?.lunchLabel ?? "Lunch Break");
+                setEditBreaks(event?.breaks ?? []);
+                setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00");
                 setShowSlotEditor(true);
               }}
               className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
@@ -914,6 +959,7 @@ export default function EventPage() {
                   {(() => {
                     const rows = [];
                     let lunchRendered = false;
+                    const renderedBreaks = new Set<string>();
                     for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
                       const slot = activeSlots[slotIdx];
                       if (activeLunchIndices.has(slotIdx)) {
@@ -936,6 +982,23 @@ export default function EventPage() {
                         }
                         continue;
                       }
+                      const breakMatch = activeBreaks.find(b => b.slotIndices.has(slotIdx));
+                      if (breakMatch) {
+                        if (!renderedBreaks.has(breakMatch.label)) {
+                          rows.push(
+                            <tr key={`break-${breakMatch.label}`}>
+                              <td className="sticky left-0 bg-slate-50 border-b border-r border-slate-200 px-3 py-2 text-[10px] font-medium text-slate-400 z-10 whitespace-nowrap">
+                                {breakMatch.from}
+                              </td>
+                              <td colSpan={rooms.length} className="border-b border-slate-200 bg-slate-50 text-center text-xs text-slate-400 font-medium py-2 select-none">
+                                {breakMatch.label} ({breakMatch.from}–{breakMatch.to})
+                              </td>
+                            </tr>
+                          );
+                          renderedBreaks.add(breakMatch.label);
+                        }
+                        continue;
+                      }
                       rows.push(
                         <tr key={slot}>
                           <td className="sticky left-0 bg-white border-b border-r border-slate-100 px-3 py-1 text-[10px] font-medium text-slate-400 z-10 whitespace-nowrap">
@@ -943,7 +1006,8 @@ export default function EventPage() {
                           </td>
                           {rooms.map(room => {
                             const placement = placementAt(room.id, currentDay, slotIdx);
-                            const isBlk     = isBlockedCell(room.id, currentDay, slotIdx);
+                            const blk       = blockedAt(room.id, currentDay, slotIdx);
+                            const isBlk     = !!blk;
                             const session   = placement ? sessionOf(placement.sessionId) : null;
                             const clash     = placement ? clashMap.get(placement.id) : undefined;
                             const isOver    = dragOverCell?.roomId === room.id && dragOverCell?.day === currentDay && dragOverCell?.slotIdx === slotIdx;
@@ -951,8 +1015,8 @@ export default function EventPage() {
                             return (
                               <td
                                 key={room.id}
-                                className={`border-b border-r border-slate-100 p-1 align-top transition-colors cursor-pointer ${
-                                  isBlk ? "bg-slate-100" : isOver ? "bg-indigo-50" : "hover:bg-slate-50/60"
+                                className={`border-b border-r border-slate-100 p-1 align-top transition-colors ${
+                                  isBlk ? "bg-slate-100" : isOver ? "bg-indigo-50 cursor-copy" : "hover:bg-slate-50/60 cursor-pointer"
                                 }`}
                                 onDragOver={e => { e.preventDefault(); setDragOverCell({ roomId: room.id, day: currentDay, slotIdx }); }}
                                 onDragLeave={() => setDragOverCell(null)}
@@ -961,8 +1025,18 @@ export default function EventPage() {
                                 onClick={() => { if (!placement && !isBlk) openCellModal(room.id, currentDay, slotIdx); }}
                               >
                                 {isBlk ? (
-                                  <div className="h-8 flex items-center justify-center">
+                                  <div
+                                    draggable
+                                    onDragStart={e => { e.stopPropagation(); draggingBlockedId.current = blk.id; draggingSessionId.current = null; }}
+                                    onDragEnd={() => { draggingBlockedId.current = null; setDragOverCell(null); }}
+                                    className="h-8 flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing group/blk"
+                                  >
                                     <span className="text-[10px] text-slate-400 select-none">Unavailable</span>
+                                    <button
+                                      onClick={e => { e.stopPropagation(); toggleBlocked(room.id, currentDay, slotIdx); }}
+                                      className="text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover/blk:opacity-100 transition-opacity leading-none"
+                                      title="Remove"
+                                    >✕</button>
                                   </div>
                                 ) : session && placement ? (
                                   <div className="relative group/cell">
@@ -1069,6 +1143,47 @@ export default function EventPage() {
                   </>
                 )}
               </div>
+
+              {/* Additional Breaks */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Additional Breaks</p>
+                {editBreaks.map((b, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
+                    <span className="flex-1 text-xs font-medium text-slate-700">{b.label}</span>
+                    <span className="text-xs text-slate-400">{b.from}–{b.to}</span>
+                    <button onClick={() => setEditBreaks(prev => prev.filter((_, j) => j !== i))}
+                      className="text-slate-300 hover:text-red-500 text-xs ml-1">✕</button>
+                  </div>
+                ))}
+                <div className="space-y-2 pt-1">
+                  <input
+                    value={newBreakLabel} onChange={e => setNewBreakLabel(e.target.value)}
+                    placeholder="Break name (e.g. Tea Break)"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">From</label>
+                      <input type="time" value={newBreakFrom} onChange={e => setNewBreakFrom(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">To</label>
+                      <input type="time" value={newBreakTo} onChange={e => setNewBreakTo(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!newBreakLabel.trim() || !newBreakFrom || !newBreakTo) return;
+                      setEditBreaks(prev => [...prev, { label: newBreakLabel.trim(), from: newBreakFrom, to: newBreakTo }]);
+                      setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00");
+                    }}
+                    disabled={!newBreakLabel.trim()}
+                    className="w-full border border-dashed border-slate-300 hover:border-indigo-400 hover:text-indigo-600 disabled:opacity-40 text-slate-500 text-xs font-medium py-2 rounded-lg transition-colors"
+                  >+ Add Break</button>
+                </div>
+              </div>
             </div>
 
             <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
@@ -1092,14 +1207,18 @@ export default function EventPage() {
                   const newLunchSlots: number[] = editHasLunch
                     ? newSlots.map((s, i) => s >= editLunchStart && s < editLunchEnd ? i : -1).filter(i => i >= 0)
                     : [];
-                  // Clear any placements/blocked that fall outside new slot count
+                  // Compute break slot indices (for clearing placements)
+                  const newBreakSlotSet = new Set(
+                    editBreaks.flatMap(b => newSlots.map((s, i) => (s >= b.from && s < b.to ? i : -1)).filter(i => i >= 0))
+                  );
                   const newLunchSet = new Set(newLunchSlots);
-                  setPlacements(prev => prev.filter(p => p.slotIdx < newSlots.length && !newLunchSet.has(p.slotIdx)));
-                  setBlocked(prev => prev.filter(b => b.slotIdx < newSlots.length && !newLunchSet.has(b.slotIdx)));
+                  const shouldClear = (idx: number) => idx >= newSlots.length || newLunchSet.has(idx) || newBreakSlotSet.has(idx);
+                  setPlacements(prev => prev.filter(p => !shouldClear(p.slotIdx)));
+                  setBlocked(prev => prev.filter(b => !shouldClear(b.slotIdx)));
                   const res = await fetch(`/api/events/${event.id}`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel }),
+                    body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel, breaks: editBreaks }),
                   });
                   if (res.ok) setEvent(await res.json());
                   setSavingSlots(false);

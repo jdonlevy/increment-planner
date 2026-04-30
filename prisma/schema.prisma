@@ -14,6 +14,7 @@ model Event {
   slots      String[]
   lunchSlots Int[]
   lunchLabel String     @default("Lunch Break")
+  breaks     Json       @default("[]")
   createdAt  DateTime    @default(now())
   sessions   Session[]
   placements Placement[]

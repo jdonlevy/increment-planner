@@ -16,6 +16,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data: {
       ...(data.slots      !== undefined && { slots:      data.slots }),
       ...(data.lunchSlots !== undefined && { lunchSlots: data.lunchSlots }),
+      ...(data.lunchLabel !== undefined && { lunchLabel: data.lunchLabel }),
+      ...(data.breaks     !== undefined && { breaks:     data.breaks }),
     },
   });
   return NextResponse.json(event);
