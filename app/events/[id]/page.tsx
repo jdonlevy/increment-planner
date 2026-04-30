@@ -602,7 +602,7 @@ export default function EventPage() {
               {saveStatus === "saved" ? "✓ Saved" : saveStatus === "saving" ? "Saving…" : "Unsaved"}
             </span>
             <button
-              onClick={() => { if (unplacedSessions.length === 0) { alert("All sessions are already scheduled!"); return; } autoSchedule(); }}
+              onClick={() => autoSchedule()}
               className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
             >
               Auto-Schedule
