@@ -11,7 +11,7 @@ type Person  = { id: string; name: string; teamId: string };
 type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
-type Event     = { id: string; name: string; days: string[] };
+type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[] };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -228,6 +228,12 @@ export default function EventPage() {
   const [cellSessCrossTeam,setCellSessCrossTeam]= useState(false);
   const [cellAttendeeInput,setCellAttendeeInput]= useState("");
 
+  // ── Slot editor ──
+  const [showSlotEditor,  setShowSlotEditor]  = useState(false);
+  const [editSlots,       setEditSlots]       = useState<string[]>([]);
+  const [editLunchSlots,  setEditLunchSlots]  = useState<Set<number>>(new Set());
+  const [savingSlots,     setSavingSlots]     = useState(false);
+
   // ── Drag state ──
   const draggingSessionId = useRef<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<{ roomId: string; day: string; slotIdx: number } | null>(null);
@@ -295,7 +301,9 @@ export default function EventPage() {
   useEffect(() => { if (loaded.current) triggerSave(); }, [globalPayload, schedPayload, triggerSave]);
 
   // ── Derived ──
-  const clashMap = useMemo(() => buildClashMap(placements, sessions, people), [placements, sessions, people]);
+  const activeSlots        = useMemo(() => event?.slots?.length      ? event.slots      : SLOTS,                          [event]);
+  const activeLunchIndices = useMemo(() => event?.lunchSlots?.length ? new Set(event.lunchSlots) : LUNCH_SLOT_INDICES, [event]);
+  const clashMap           = useMemo(() => buildClashMap(placements, sessions, people), [placements, sessions, people]);
 
   const teamOf    = (id: string) => teams.find(t => t.id === id);
   const sessionOf = (id: string) => sessions.find(s => s.id === id);
@@ -373,7 +381,7 @@ export default function EventPage() {
   // ── Drag & drop ──
   const handleDrop = (roomId: string, day: string, slotIdx: number) => {
     const id = draggingSessionId.current;
-    if (!id || isBlockedCell(roomId, day, slotIdx) || LUNCH_SLOT_INDICES.has(slotIdx)) return;
+    if (!id || isBlockedCell(roomId, day, slotIdx) || activeLunchIndices.has(slotIdx)) return;
     setPlacements(prev => [
       ...prev.filter(p => p.sessionId !== id && !(p.roomId === roomId && p.day === day && p.slotIdx === slotIdx)),
       { id: uid(), sessionId: id, roomId, day, slotIdx },
@@ -387,7 +395,7 @@ export default function EventPage() {
   };
 
   const toggleBlocked = (roomId: string, day: string, slotIdx: number) => {
-    if (placementAt(roomId, day, slotIdx) || LUNCH_SLOT_INDICES.has(slotIdx)) return;
+    if (placementAt(roomId, day, slotIdx) || activeLunchIndices.has(slotIdx)) return;
     setBlocked(prev => {
       const exists = prev.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
       if (exists) return prev.filter(b => b.id !== exists.id);
@@ -461,8 +469,8 @@ export default function EventPage() {
         if (placed) break;
         for (const day of event.days) {
           if (placed) break;
-          for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-            if (LUNCH_SLOT_INDICES.has(slotIdx)) continue;
+          for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
+            if (activeLunchIndices.has(slotIdx)) continue;
             if (roomBusy(room.id, day, slotIdx)) continue;
             if (isBlk(room.id, day, slotIdx)) continue;
             if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
@@ -481,8 +489,8 @@ export default function EventPage() {
     if (!event) return;
     const rows = [["Day", "Time", "Room", "Session", "Team", "Attendees", "Notes"]];
     for (const day of event.days) {
-      for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-        if (LUNCH_SLOT_INDICES.has(slotIdx)) continue;
+      for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
+        if (activeLunchIndices.has(slotIdx)) continue;
         for (const room of rooms) {
           const p = placementAt(room.id, day, slotIdx);
           if (!p) continue;
@@ -490,7 +498,7 @@ export default function EventPage() {
           if (!sess) continue;
           const team = teamOf(sess.teamId);
           const attendees = people.filter(pe => sess.attendeeIds.includes(pe.id)).map(pe => pe.name).join("; ");
-          rows.push([formatDayFull(day), SLOTS[slotIdx], room.name, sess.name, team?.name ?? "", attendees, sess.notes]);
+          rows.push([formatDayFull(day), activeSlots[slotIdx], room.name, sess.name, team?.name ?? "", attendees, sess.notes]);
         }
       }
     }
@@ -539,15 +547,19 @@ export default function EventPage() {
       html += `</tr></thead><tbody>`;
 
       let lunchRendered = false;
-      for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-        if (LUNCH_SLOT_INDICES.has(slotIdx)) {
+      for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
+        if (activeLunchIndices.has(slotIdx)) {
           if (!lunchRendered) {
-            html += `<tr><td class="time-cell">12:00</td><td colspan="${rooms.length}" class="lunch-cell">Lunch Break (12:00–13:00)</td></tr>`;
+            const lunchStart = activeSlots[Math.min(...[...activeLunchIndices])] ?? "12:00";
+            const lunchEndIdx = Math.max(...[...activeLunchIndices]);
+            const [lh, lm] = (activeSlots[lunchEndIdx] ?? "12:30").split(":").map(Number);
+            const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
+            html += `<tr><td class="time-cell">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell">Lunch Break (${lunchStart}–${lunchEnd})</td></tr>`;
             lunchRendered = true;
           }
           continue;
         }
-        html += `<tr><td class="time-cell">${SLOTS[slotIdx]}</td>`;
+        html += `<tr><td class="time-cell">${activeSlots[slotIdx]}</td>`;
         for (const room of rooms) {
           const p    = placements.find(pl => pl.roomId === room.id && pl.day === day && pl.slotIdx === slotIdx);
           const isBlk = blocked.some(b => b.roomId === room.id && b.day === day && b.slotIdx === slotIdx);
@@ -618,6 +630,12 @@ export default function EventPage() {
             }`}>
               {saveStatus === "saved" ? "✓ Saved" : saveStatus === "saving" ? "Saving…" : "Unsaved"}
             </span>
+            <button
+              onClick={() => { setEditSlots([...activeSlots]); setEditLunchSlots(new Set(activeLunchIndices)); setShowSlotEditor(true); }}
+              className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Edit Times
+            </button>
             <button
               onClick={() => autoSchedule()}
               className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
@@ -720,7 +738,7 @@ export default function EventPage() {
                             expanded={expandedSessions.has(s.id)}
                             onToggleExpand={() => setExpandedSessions(prev => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })}
                             onDragStart={id => { draggingSessionId.current = id; }} />
-                          <p className="text-[10px] text-slate-400 mt-0.5">{formatDayTab(p.day)} · {SLOTS[p.slotIdx]} · {room?.name}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5">{formatDayTab(p.day)} · {activeSlots[p.slotIdx]} · {room?.name}</p>
                           <div className="absolute top-1 right-1 hidden group-hover:flex gap-0.5">
                             <button onClick={() => setEditSession(s)} className="text-[10px] text-slate-400 hover:text-indigo-600 px-1">✎</button>
                             <button onClick={() => { if (confirm(`Delete "${s.name}"? This cannot be undone.`)) removeSession(s.id); }} className="text-[10px] text-slate-400 hover:text-red-500 px-1">✕</button>
@@ -863,17 +881,21 @@ export default function EventPage() {
                   {(() => {
                     const rows = [];
                     let lunchRendered = false;
-                    for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-                      const slot = SLOTS[slotIdx];
-                      if (LUNCH_SLOT_INDICES.has(slotIdx)) {
+                    for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
+                      const slot = activeSlots[slotIdx];
+                      if (activeLunchIndices.has(slotIdx)) {
                         if (!lunchRendered) {
+                          const lunchStart = activeSlots[Math.min(...[...activeLunchIndices])] ?? "12:00";
+                          const lunchEndIdx = Math.max(...[...activeLunchIndices]);
+                          const [lh, lm] = (activeSlots[lunchEndIdx] ?? "12:30").split(":").map(Number);
+                          const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
                           rows.push(
                             <tr key="lunch">
                               <td className="sticky left-0 bg-amber-50 border-b border-r border-amber-100 px-3 py-2 text-[10px] font-medium text-amber-500 z-10 whitespace-nowrap">
-                                12:00
+                                {lunchStart}
                               </td>
                               <td colSpan={rooms.length} className="border-b border-amber-100 bg-amber-50 text-center text-xs text-amber-400 font-medium py-2 select-none">
-                                Lunch Break (12:00–13:00)
+                                Lunch Break ({lunchStart}–{lunchEnd})
                               </td>
                             </tr>
                           );
@@ -946,6 +968,112 @@ export default function EventPage() {
         </main>
       </div>
 
+      {/* ── Slot Editor Modal ── */}
+      {showSlotEditor && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowSlotEditor(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0">
+              <div>
+                <h2 className="font-semibold text-slate-900 text-sm">Edit Schedule Times</h2>
+                <p className="text-[10px] text-slate-400 mt-0.5">Edit times, toggle lunch, add or remove slots</p>
+              </div>
+              <button onClick={() => setShowSlotEditor(false)} className="text-slate-400 hover:text-slate-700">✕</button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 px-5 py-3 space-y-1">
+              {editSlots.map((slot, idx) => {
+                const isLunch = editLunchSlots.has(idx);
+                const hasData = placements.some(p => p.slotIdx === idx) || blocked.some(b => b.slotIdx === idx);
+                return (
+                  <div key={idx} className={`flex items-center gap-2 py-1.5 px-2 rounded-lg ${isLunch ? "bg-amber-50 border border-amber-100" : "hover:bg-slate-50"}`}>
+                    <span className="text-[10px] text-slate-400 w-5 text-right shrink-0">{idx + 1}</span>
+                    <input
+                      type="time"
+                      value={slot}
+                      onChange={e => setEditSlots(prev => prev.map((s, i) => i === idx ? e.target.value : s))}
+                      className="flex-1 border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                    <label className="flex items-center gap-1 cursor-pointer shrink-0" title="Mark as lunch break">
+                      <input
+                        type="checkbox"
+                        checked={isLunch}
+                        onChange={e => setEditLunchSlots(prev => {
+                          const next = new Set(prev);
+                          e.target.checked ? next.add(idx) : next.delete(idx);
+                          return next;
+                        })}
+                        className="rounded border-slate-300 text-amber-500 focus:ring-amber-400"
+                      />
+                      <span className="text-[10px] text-slate-500">Lunch</span>
+                    </label>
+                    {idx === editSlots.length - 1 && (
+                      <button
+                        onClick={() => {
+                          if (hasData) { alert("This slot has sessions or blocked cells — remove them first."); return; }
+                          setEditSlots(prev => prev.slice(0, -1));
+                          setEditLunchSlots(prev => { const n = new Set(prev); n.delete(idx); return n; });
+                        }}
+                        className="text-slate-300 hover:text-red-500 text-xs shrink-0 transition-colors"
+                        title="Remove last slot"
+                      >✕</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-100 shrink-0">
+              <button
+                onClick={() => {
+                  const last = editSlots[editSlots.length - 1] ?? "16:30";
+                  const [h, m] = last.split(":").map(Number);
+                  const total = h * 60 + m + 30;
+                  const next = `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+                  setEditSlots(prev => [...prev, next]);
+                }}
+                className="w-full text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 py-1.5 rounded-lg transition-colors font-medium"
+              >
+                + Add slot
+              </button>
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
+              <button onClick={() => setShowSlotEditor(false)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">Cancel</button>
+              <button
+                disabled={savingSlots || editSlots.length === 0}
+                onClick={async () => {
+                  if (!event) return;
+                  setSavingSlots(true);
+                  const lunchArr = [...editLunchSlots].sort((a, b) => a - b);
+                  // Remove placements/blocked for any slots that were removed
+                  const removedIndices = new Set(
+                    Array.from({ length: activeSlots.length }, (_, i) => i).filter(i => i >= editSlots.length)
+                  );
+                  if (removedIndices.size > 0) {
+                    setPlacements(prev => prev.filter(p => !removedIndices.has(p.slotIdx)));
+                    setBlocked(prev => prev.filter(b => !removedIndices.has(b.slotIdx)));
+                  }
+                  const res = await fetch(`/api/events/${event.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ slots: editSlots, lunchSlots: lunchArr }),
+                  });
+                  if (res.ok) {
+                    const updated = await res.json();
+                    setEvent(updated);
+                  }
+                  setSavingSlots(false);
+                  setShowSlotEditor(false);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+              >
+                {savingSlots ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Cell Click Modal ── */}
       {cellModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={closeCellModal}>
@@ -953,7 +1081,7 @@ export default function EventPage() {
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
               <div>
                 <h2 className="font-semibold text-slate-900 text-sm">
-                  {SLOTS[cellModal.slotIdx]} · {rooms.find(r => r.id === cellModal.roomId)?.name}
+                  {activeSlots[cellModal.slotIdx]} · {rooms.find(r => r.id === cellModal.roomId)?.name}
                 </h2>
                 <p className="text-[10px] text-slate-400">{formatDayFull(cellModal.day)}</p>
               </div>

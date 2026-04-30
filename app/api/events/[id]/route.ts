@@ -8,6 +8,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json(event);
 }
 
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const data = await req.json();
+  const event = await prisma.event.update({
+    where: { id },
+    data: {
+      ...(data.slots      !== undefined && { slots:      data.slots }),
+      ...(data.lunchSlots !== undefined && { lunchSlots: data.lunchSlots }),
+    },
+  });
+  return NextResponse.json(event);
+}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await prisma.event.delete({ where: { id } });

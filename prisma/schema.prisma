@@ -11,6 +11,8 @@ model Event {
   id         String      @id @default(cuid())
   name       String
   days       String[]
+  slots      String[]
+  lunchSlots Int[]
   createdAt  DateTime    @default(now())
   sessions   Session[]
   placements Placement[]
