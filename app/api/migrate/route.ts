@@ -13,6 +13,7 @@ export async function POST() {
   await prisma.$executeRaw`ALTER TABLE "Session"   ADD COLUMN IF NOT EXISTS "crossTeam"  BOOLEAN   NOT NULL DEFAULT false`;
   await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "slots"      TEXT[]    NOT NULL DEFAULT '{}'`;
   await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "lunchSlots" INTEGER[] NOT NULL DEFAULT '{}'`;
+  await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "lunchLabel" TEXT       NOT NULL DEFAULT 'Lunch Break'`;
 
   // ── Step 2: Ensure IP MAY 2026 event exists ──
   let event = await prisma.event.findFirst({ where: { name: "IP MAY 2026" } });

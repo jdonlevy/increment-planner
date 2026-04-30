@@ -11,7 +11,7 @@ type Person  = { id: string; name: string; teamId: string };
 type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
-type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[] };
+type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -149,9 +149,18 @@ function AttendeeSelector({
   people: Person[]; currentIds: string[];
   inputClassName?: string;
 }) {
-  const suggestions = value.trim()
-    ? people.filter(p => !currentIds.includes(p.id) && p.name.toLowerCase().includes(value.toLowerCase())).slice(0, 5)
-    : [];
+  const suggestions = useMemo(() => {
+    if (!value.trim()) return [];
+    const seen = new Set<string>();
+    return people.filter(p => {
+      if (currentIds.includes(p.id)) return false;
+      if (!p.name.toLowerCase().includes(value.toLowerCase())) return false;
+      const key = p.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 5);
+  }, [value, people, currentIds]);
 
   return (
     <div className="relative">
@@ -229,10 +238,15 @@ export default function EventPage() {
   const [cellAttendeeInput,setCellAttendeeInput]= useState("");
 
   // ── Slot editor ──
-  const [showSlotEditor,  setShowSlotEditor]  = useState(false);
-  const [editSlots,       setEditSlots]       = useState<string[]>([]);
-  const [editLunchSlots,  setEditLunchSlots]  = useState<Set<number>>(new Set());
-  const [savingSlots,     setSavingSlots]     = useState(false);
+  const [showSlotEditor,    setShowSlotEditor]    = useState(false);
+  const [editStartTime,     setEditStartTime]     = useState("09:00");
+  const [editEndTime,       setEditEndTime]       = useState("16:30");
+  const [editSlotDuration,  setEditSlotDuration]  = useState(30);
+  const [editLunchStart,    setEditLunchStart]    = useState("12:00");
+  const [editLunchEnd,      setEditLunchEnd]      = useState("13:00");
+  const [editLunchLabel,    setEditLunchLabel]    = useState("Lunch Break");
+  const [editHasLunch,      setEditHasLunch]      = useState(true);
+  const [savingSlots,       setSavingSlots]       = useState(false);
 
   // ── Drag state ──
   const draggingSessionId = useRef<string | null>(null);
@@ -554,7 +568,7 @@ export default function EventPage() {
             const lunchEndIdx = Math.max(...[...activeLunchIndices]);
             const [lh, lm] = (activeSlots[lunchEndIdx] ?? "12:30").split(":").map(Number);
             const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
-            html += `<tr><td class="time-cell">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell">Lunch Break (${lunchStart}–${lunchEnd})</td></tr>`;
+            html += `<tr><td class="time-cell">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell">${event?.lunchLabel ?? "Lunch Break"} (${lunchStart}–${lunchEnd})</td></tr>`;
             lunchRendered = true;
           }
           continue;
@@ -631,7 +645,26 @@ export default function EventPage() {
               {saveStatus === "saved" ? "✓ Saved" : saveStatus === "saving" ? "Saving…" : "Unsaved"}
             </span>
             <button
-              onClick={() => { setEditSlots([...activeSlots]); setEditLunchSlots(new Set(activeLunchIndices)); setShowSlotEditor(true); }}
+              onClick={() => {
+                const nonLunch = activeSlots.filter((_, i) => !activeLunchIndices.has(i));
+                setEditStartTime(nonLunch[0] ?? "09:00");
+                setEditEndTime(nonLunch[nonLunch.length - 1] ?? "16:30");
+                const dur = nonLunch.length >= 2
+                  ? (() => { const [h1,m1] = nonLunch[0].split(":").map(Number); const [h2,m2] = nonLunch[1].split(":").map(Number); return (h2*60+m2)-(h1*60+m1); })()
+                  : 30;
+                setEditSlotDuration(dur);
+                const lunchTimes = [...activeLunchIndices].sort((a,b)=>a-b).map(i => activeSlots[i]).filter(Boolean);
+                const hasLunch = lunchTimes.length > 0;
+                setEditHasLunch(hasLunch);
+                if (hasLunch) {
+                  setEditLunchStart(lunchTimes[0]);
+                  const [lh,lm] = lunchTimes[lunchTimes.length-1].split(":").map(Number);
+                  const endMins = lh*60+lm+dur;
+                  setEditLunchEnd(`${String(Math.floor(endMins/60)).padStart(2,"0")}:${String(endMins%60).padStart(2,"0")}`);
+                }
+                setEditLunchLabel(event?.lunchLabel ?? "Lunch Break");
+                setShowSlotEditor(true);
+              }}
               className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
             >
               Edit Times
@@ -895,7 +928,7 @@ export default function EventPage() {
                                 {lunchStart}
                               </td>
                               <td colSpan={rooms.length} className="border-b border-amber-100 bg-amber-50 text-center text-xs text-amber-400 font-medium py-2 select-none">
-                                Lunch Break ({lunchStart}–{lunchEnd})
+                                {event?.lunchLabel ?? "Lunch Break"} ({lunchStart}–{lunchEnd})
                               </td>
                             </tr>
                           );
@@ -971,97 +1004,104 @@ export default function EventPage() {
       {/* ── Slot Editor Modal ── */}
       {showSlotEditor && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowSlotEditor(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0">
-              <div>
-                <h2 className="font-semibold text-slate-900 text-sm">Edit Schedule Times</h2>
-                <p className="text-[10px] text-slate-400 mt-0.5">Edit times, toggle lunch, add or remove slots</p>
-              </div>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+              <h2 className="font-semibold text-slate-900 text-sm">Schedule Times</h2>
               <button onClick={() => setShowSlotEditor(false)} className="text-slate-400 hover:text-slate-700">✕</button>
             </div>
 
-            <div className="overflow-y-auto flex-1 px-5 py-3 space-y-1">
-              {editSlots.map((slot, idx) => {
-                const isLunch = editLunchSlots.has(idx);
-                const hasData = placements.some(p => p.slotIdx === idx) || blocked.some(b => b.slotIdx === idx);
-                return (
-                  <div key={idx} className={`flex items-center gap-2 py-1.5 px-2 rounded-lg ${isLunch ? "bg-amber-50 border border-amber-100" : "hover:bg-slate-50"}`}>
-                    <span className="text-[10px] text-slate-400 w-5 text-right shrink-0">{idx + 1}</span>
-                    <input
-                      type="time"
-                      value={slot}
-                      onChange={e => setEditSlots(prev => prev.map((s, i) => i === idx ? e.target.value : s))}
-                      className="flex-1 border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    />
-                    <label className="flex items-center gap-1 cursor-pointer shrink-0" title="Mark as lunch break">
-                      <input
-                        type="checkbox"
-                        checked={isLunch}
-                        onChange={e => setEditLunchSlots(prev => {
-                          const next = new Set(prev);
-                          e.target.checked ? next.add(idx) : next.delete(idx);
-                          return next;
-                        })}
-                        className="rounded border-slate-300 text-amber-500 focus:ring-amber-400"
-                      />
-                      <span className="text-[10px] text-slate-500">Lunch</span>
-                    </label>
-                    {idx === editSlots.length - 1 && (
-                      <button
-                        onClick={() => {
-                          if (hasData) { alert("This slot has sessions or blocked cells — remove them first."); return; }
-                          setEditSlots(prev => prev.slice(0, -1));
-                          setEditLunchSlots(prev => { const n = new Set(prev); n.delete(idx); return n; });
-                        }}
-                        className="text-slate-300 hover:text-red-500 text-xs shrink-0 transition-colors"
-                        title="Remove last slot"
-                      >✕</button>
-                    )}
+            <div className="px-5 py-4 space-y-4">
+              {/* Day times */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Day</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Start</label>
+                    <input type="time" value={editStartTime} onChange={e => setEditStartTime(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                   </div>
-                );
-              })}
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">End</label>
+                    <input type="time" value={editEndTime} onChange={e => setEditEndTime(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Slot size</label>
+                  <select value={editSlotDuration} onChange={e => setEditSlotDuration(Number(e.target.value))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                    <option value={15}>15 minutes</option>
+                    <option value={30}>30 minutes</option>
+                    <option value={60}>60 minutes</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Lunch break */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Lunch Break</p>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={editHasLunch} onChange={e => setEditHasLunch(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+                    <span className="text-xs text-slate-500">Enabled</span>
+                  </label>
+                </div>
+                {editHasLunch && (
+                  <>
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">Label</label>
+                      <input value={editLunchLabel} onChange={e => setEditLunchLabel(e.target.value)} placeholder="Lunch Break"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">From</label>
+                        <input type="time" value={editLunchStart} onChange={e => setEditLunchStart(e.target.value)}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">To</label>
+                        <input type="time" value={editLunchEnd} onChange={e => setEditLunchEnd(e.target.value)}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
-            <div className="px-5 py-3 border-t border-slate-100 shrink-0">
-              <button
-                onClick={() => {
-                  const last = editSlots[editSlots.length - 1] ?? "16:30";
-                  const [h, m] = last.split(":").map(Number);
-                  const total = h * 60 + m + 30;
-                  const next = `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-                  setEditSlots(prev => [...prev, next]);
-                }}
-                className="w-full text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 py-1.5 rounded-lg transition-colors font-medium"
-              >
-                + Add slot
-              </button>
-            </div>
-
-            <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
+            <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
               <button onClick={() => setShowSlotEditor(false)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">Cancel</button>
               <button
-                disabled={savingSlots || editSlots.length === 0}
+                disabled={savingSlots}
                 onClick={async () => {
                   if (!event) return;
                   setSavingSlots(true);
-                  const lunchArr = [...editLunchSlots].sort((a, b) => a - b);
-                  // Remove placements/blocked for any slots that were removed
-                  const removedIndices = new Set(
-                    Array.from({ length: activeSlots.length }, (_, i) => i).filter(i => i >= editSlots.length)
-                  );
-                  if (removedIndices.size > 0) {
-                    setPlacements(prev => prev.filter(p => !removedIndices.has(p.slotIdx)));
-                    setBlocked(prev => prev.filter(b => !removedIndices.has(b.slotIdx)));
+                  // Generate slots from start/end/duration
+                  const [sh, sm] = editStartTime.split(":").map(Number);
+                  const [eh, em] = editEndTime.split(":").map(Number);
+                  const newSlots: string[] = [];
+                  let curr = sh * 60 + sm;
+                  const endMins = eh * 60 + em;
+                  while (curr <= endMins) {
+                    newSlots.push(`${String(Math.floor(curr/60)).padStart(2,"0")}:${String(curr%60).padStart(2,"0")}`);
+                    curr += editSlotDuration;
                   }
+                  // Compute lunch slot indices
+                  const newLunchSlots: number[] = editHasLunch
+                    ? newSlots.map((s, i) => s >= editLunchStart && s < editLunchEnd ? i : -1).filter(i => i >= 0)
+                    : [];
+                  // Clear any placements/blocked that fall outside new slot count
+                  const newLunchSet = new Set(newLunchSlots);
+                  setPlacements(prev => prev.filter(p => p.slotIdx < newSlots.length && !newLunchSet.has(p.slotIdx)));
+                  setBlocked(prev => prev.filter(b => b.slotIdx < newSlots.length && !newLunchSet.has(b.slotIdx)));
                   const res = await fetch(`/api/events/${event.id}`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ slots: editSlots, lunchSlots: lunchArr }),
+                    body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel }),
                   });
-                  if (res.ok) {
-                    const updated = await res.json();
-                    setEvent(updated);
-                  }
+                  if (res.ok) setEvent(await res.json());
                   setSavingSlots(false);
                   setShowSlotEditor(false);
                 }}
