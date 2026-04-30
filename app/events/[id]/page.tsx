@@ -252,6 +252,7 @@ export default function EventPage() {
   const [newBreakFrom,      setNewBreakFrom]      = useState("10:30");
   const [newBreakTo,        setNewBreakTo]        = useState("11:00");
   const [savingSlots,       setSavingSlots]       = useState(false);
+  const [slotSaveError,     setSlotSaveError]     = useState("");
 
   // ── Drag state ──
   const draggingSessionId = useRef<string | null>(null);
@@ -267,6 +268,8 @@ export default function EventPage() {
   // ── Load ──
   useEffect(() => {
     const init = async () => {
+      // Ensure DB columns are up to date before loading (idempotent, fast after first run)
+      await fetch("/api/migrate", { method: "POST" });
       const [evRes, globalRes, schedRes] = await Promise.all([
         fetch(`/api/events/${eventId}`),
         fetch("/api/global"),
@@ -611,7 +614,7 @@ export default function EventPage() {
         const breakMatch = activeBreaks.find(b => b.slotIndices.has(slotIdx));
         if (breakMatch) {
           if (!renderedBreaksPdf.has(breakMatch.label)) {
-            html += `<tr><td class="time-cell">${breakMatch.from}</td><td colspan="${rooms.length}" class="lunch-cell">${breakMatch.label} (${breakMatch.from}–${breakMatch.to})</td></tr>`;
+            html += `<tr><td class="time-cell">${breakMatch.from}</td><td colspan="${rooms.length}" class="lunch-cell" style="background:#fff7ed;color:#fb923c">${breakMatch.label} (${breakMatch.from}–${breakMatch.to})</td></tr>`;
             renderedBreaksPdf.add(breakMatch.label);
           }
           continue;
@@ -987,10 +990,10 @@ export default function EventPage() {
                         if (!renderedBreaks.has(breakMatch.label)) {
                           rows.push(
                             <tr key={`break-${breakMatch.label}`}>
-                              <td className="sticky left-0 bg-slate-50 border-b border-r border-slate-200 px-3 py-2 text-[10px] font-medium text-slate-400 z-10 whitespace-nowrap">
+                              <td className="sticky left-0 bg-orange-50 border-b border-r border-orange-100 px-3 py-2 text-[10px] font-medium text-orange-400 z-10 whitespace-nowrap">
                                 {breakMatch.from}
                               </td>
-                              <td colSpan={rooms.length} className="border-b border-slate-200 bg-slate-50 text-center text-xs text-slate-400 font-medium py-2 select-none">
+                              <td colSpan={rooms.length} className="border-b border-orange-100 bg-orange-50 text-center text-xs text-orange-400 font-medium py-2 select-none">
                                 {breakMatch.label} ({breakMatch.from}–{breakMatch.to})
                               </td>
                             </tr>
@@ -1186,8 +1189,9 @@ export default function EventPage() {
               </div>
             </div>
 
-            <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-              <button onClick={() => setShowSlotEditor(false)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">Cancel</button>
+            <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-end gap-2">
+              {slotSaveError && <p className="text-xs text-red-500 mr-auto">{slotSaveError}</p>}
+              <button onClick={() => { setShowSlotEditor(false); setSlotSaveError(""); }} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">Cancel</button>
               <button
                 disabled={savingSlots}
                 onClick={async () => {
@@ -1215,14 +1219,20 @@ export default function EventPage() {
                   const shouldClear = (idx: number) => idx >= newSlots.length || newLunchSet.has(idx) || newBreakSlotSet.has(idx);
                   setPlacements(prev => prev.filter(p => !shouldClear(p.slotIdx)));
                   setBlocked(prev => prev.filter(b => !shouldClear(b.slotIdx)));
+                  setSlotSaveError("");
                   const res = await fetch(`/api/events/${event.id}`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel, breaks: editBreaks }),
                   });
-                  if (res.ok) setEvent(await res.json());
-                  setSavingSlots(false);
-                  setShowSlotEditor(false);
+                  if (res.ok) {
+                    setEvent(await res.json());
+                    setSavingSlots(false);
+                    setShowSlotEditor(false);
+                  } else {
+                    setSlotSaveError("Save failed — please try again.");
+                    setSavingSlots(false);
+                  }
                 }}
                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
               >
