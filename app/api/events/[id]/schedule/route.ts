@@ -27,6 +27,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         id: s.id,
         name: s.name,
         notes: s.notes ?? "",
+        crossTeam: s.crossTeam ?? false,
         teamId: s.teamId,
         eventId: id,
         attendees: { connect: s.attendeeIds.map((aid: string) => ({ id: aid })) },

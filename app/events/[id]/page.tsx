@@ -8,7 +8,7 @@ import { useRouter, useParams } from "next/navigation";
 type Room    = { id: string; name: string };
 type Team    = { id: string; name: string; colorIdx: number; roomId: string | null };
 type Person  = { id: string; name: string; teamId: string };
-type Session = { id: string; name: string; notes: string; teamId: string; attendeeIds: string[] };
+type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
 type Event     = { id: string; name: string; days: string[] };
@@ -90,6 +90,8 @@ function buildClashMap(
 
 // ─── SessionCard ─────────────────────────────────────────────────────────────
 
+const GREY = { bg: "bg-slate-100", border: "border-slate-300", text: "text-slate-600", dot: "bg-slate-400", hex: "#f1f5f9" };
+
 function SessionCard({
   session, team, people, clash, expanded, onToggleExpand, onDragStart,
 }: {
@@ -97,7 +99,9 @@ function SessionCard({
   clash?: string[]; expanded: boolean; onToggleExpand: () => void;
   onDragStart: (id: string) => void;
 }) {
-  const c = team ? TEAM_COLORS[team.colorIdx % TEAM_COLORS.length] : TEAM_COLORS[0];
+  const c = session.crossTeam
+    ? (team ? TEAM_COLORS[team.colorIdx % TEAM_COLORS.length] : TEAM_COLORS[0])
+    : GREY;
   const attendees = people.filter(p => session.attendeeIds.includes(p.id));
 
   return (
@@ -200,6 +204,7 @@ export default function EventPage() {
   const [newSessTeam,      setNewSessTeam]      = useState("");
   const [newSessNotes,     setNewSessNotes]     = useState("");
   const [newSessAttendees, setNewSessAttendees] = useState<string[]>([]);
+  const [newSessCrossTeam, setNewSessCrossTeam] = useState(false);
   const [attendeeInput,    setAttendeeInput]    = useState("");
 
   // ── Teams / rooms / people forms ──
@@ -220,6 +225,7 @@ export default function EventPage() {
   const [cellSessTeam,     setCellSessTeam]     = useState("");
   const [cellSessNotes,    setCellSessNotes]    = useState("");
   const [cellSessAttendees,setCellSessAttendees]= useState<string[]>([]);
+  const [cellSessCrossTeam,setCellSessCrossTeam]= useState(false);
   const [cellAttendeeInput,setCellAttendeeInput]= useState("");
 
   // ── Drag state ──
@@ -247,8 +253,8 @@ export default function EventPage() {
       setRooms(global.rooms);
       setTeams(global.teams);
       setPeople(global.people);
-      setSessions(sched.sessions.map((s: { id: string; name: string; notes: string; teamId: string; attendees: { id: string }[] }) => ({
-        id: s.id, name: s.name, notes: s.notes, teamId: s.teamId,
+      setSessions(sched.sessions.map((s: { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendees: { id: string }[] }) => ({
+        id: s.id, name: s.name, notes: s.notes, crossTeam: s.crossTeam ?? false, teamId: s.teamId,
         attendeeIds: s.attendees.map((a: { id: string }) => a.id),
       })));
       setPlacements(sched.placements);
@@ -292,10 +298,10 @@ export default function EventPage() {
   const unplacedSessions = sessions.filter(s => !placements.some(p => p.sessionId === s.id));
 
   // ── Session actions ──
-  const addSession = (name: string, teamId: string, notes: string, attendeeIds: string[], placeAt?: { roomId: string; day: string; slotIdx: number }) => {
+  const addSession = (name: string, teamId: string, notes: string, attendeeIds: string[], crossTeam: boolean, placeAt?: { roomId: string; day: string; slotIdx: number }) => {
     if (!name.trim() || !teamId) return;
     const id = uid();
-    setSessions(prev => [...prev, { id, name: name.trim(), notes: notes.trim(), teamId, attendeeIds }]);
+    setSessions(prev => [...prev, { id, name: name.trim(), notes: notes.trim(), crossTeam, teamId, attendeeIds }]);
     if (placeAt) {
       setPlacements(prev => [...prev.filter(p => !(p.roomId === placeAt.roomId && p.day === placeAt.day && p.slotIdx === placeAt.slotIdx)), {
         id: uid(), sessionId: id, roomId: placeAt.roomId, day: placeAt.day, slotIdx: placeAt.slotIdx,
@@ -388,11 +394,11 @@ export default function EventPage() {
     setCellSessAttendees([]); setCellAttendeeInput("");
   };
 
-  const closeCellModal = () => { setCellModal(null); setCellStep("choose"); };
+  const closeCellModal = () => { setCellModal(null); setCellStep("choose"); setCellSessCrossTeam(false); };
 
   const submitCellSession = () => {
     if (!cellModal || !cellSessName.trim() || !cellSessTeam) return;
-    addSession(cellSessName, cellSessTeam, cellSessNotes, cellSessAttendees, cellModal);
+    addSession(cellSessName, cellSessTeam, cellSessNotes, cellSessAttendees, cellSessCrossTeam, cellModal);
     closeCellModal();
   };
 
@@ -540,7 +546,7 @@ export default function EventPage() {
             const sess = sessions.find(s => s.id === p.sessionId);
             if (sess) {
               const team     = teams.find(t => t.id === sess.teamId);
-              const color    = team ? TEAM_COLORS[team.colorIdx % TEAM_COLORS.length].hex : "#f8fafc";
+              const color    = sess.crossTeam ? (team ? TEAM_COLORS[team.colorIdx % TEAM_COLORS.length].hex : "#f8fafc") : GREY.hex;
               const attNames = people.filter(pe => sess.attendeeIds.includes(pe.id)).map(pe => pe.name).join(", ");
               const clash    = clashMap.get(p.id);
               html += `<td style="background:${color}">`;
@@ -661,8 +667,12 @@ export default function EventPage() {
                         ) : null; })}
                       </div>
                     )}
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input type="checkbox" checked={newSessCrossTeam} onChange={e => setNewSessCrossTeam(e.target.checked)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+                      <span className="text-xs text-slate-600">Cross-team session</span>
+                    </label>
                     <button
-                      onClick={() => { addSession(newSessName, newSessTeam, newSessNotes, newSessAttendees); setNewSessName(""); setNewSessTeam(""); setNewSessNotes(""); setNewSessAttendees([]); setAttendeeInput(""); setShowAddSession(false); }}
+                      onClick={() => { addSession(newSessName, newSessTeam, newSessNotes, newSessAttendees, newSessCrossTeam); setNewSessName(""); setNewSessTeam(""); setNewSessNotes(""); setNewSessAttendees([]); setNewSessCrossTeam(false); setAttendeeInput(""); setShowAddSession(false); }}
                       disabled={!newSessName.trim() || !newSessTeam}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold py-1.5 rounded-lg transition-colors"
                     >Add Session</button>
@@ -990,6 +1000,10 @@ export default function EventPage() {
                     </div>
                   )}
                 </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={cellSessCrossTeam} onChange={e => setCellSessCrossTeam(e.target.checked)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+                    <span className="text-sm text-slate-600">Cross-team session</span>
+                  </label>
                 <div className="px-5 py-4 border-t border-slate-200 flex justify-between gap-2">
                   <button onClick={() => setCellStep("choose")} className="text-sm text-slate-500 hover:text-slate-700">← Back</button>
                   <div className="flex gap-2">
@@ -1023,6 +1037,10 @@ export default function EventPage() {
               </select>
               <textarea value={editSession.notes} onChange={e => setEditSession(s => s ? { ...s, notes: e.target.value } : s)} placeholder="Notes" rows={2}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none" />
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={editSession.crossTeam} onChange={e => setEditSession(s => s ? { ...s, crossTeam: e.target.checked } : s)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+                <span className="text-sm text-slate-600">Cross-team session</span>
+              </label>
               <div>
                 <p className="text-xs font-medium text-slate-600 mb-1.5">Attendees</p>
                 <AttendeeSelector
