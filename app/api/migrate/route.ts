@@ -9,27 +9,32 @@ const DAY_MAP: Record<string, string> = {
 };
 
 export async function POST() {
-  // Check if IP MAY 2026 already exists
+  // ── Step 1: Safe column additions (ADD COLUMN IF NOT EXISTS never drops data) ──
+  await prisma.$executeRaw`ALTER TABLE "Session"   ADD COLUMN IF NOT EXISTS "crossTeam"  BOOLEAN   NOT NULL DEFAULT false`;
+  await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "slots"      TEXT[]    NOT NULL DEFAULT '{}'`;
+  await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "lunchSlots" INTEGER[] NOT NULL DEFAULT '{}'`;
+
+  // ── Step 2: Ensure IP MAY 2026 event exists ──
   let event = await prisma.event.findFirst({ where: { name: "IP MAY 2026" } });
 
   if (!event) {
     event = await prisma.event.create({ data: { name: "IP MAY 2026", days: IP_MAY_DAYS } });
   }
 
-  // Migrate orphaned sessions (no eventId)
+  // ── Step 3: Migrate orphaned sessions (no eventId) ──
   const orphanedSessions = await prisma.session.findMany({ where: { eventId: null } });
   if (orphanedSessions.length > 0) {
     await prisma.session.updateMany({ where: { eventId: null }, data: { eventId: event.id } });
   }
 
-  // Migrate orphaned placements — also convert mon/tue/thu to dates
+  // ── Step 4: Migrate orphaned placements — convert mon/tue/thu to dates ──
   const orphanedPlacements = await prisma.placement.findMany({ where: { eventId: null } });
   for (const p of orphanedPlacements) {
     const day = DAY_MAP[p.day] ?? p.day;
     await prisma.placement.update({ where: { id: p.id }, data: { eventId: event.id, day } });
   }
 
-  // Migrate orphaned blocked slots
+  // ── Step 5: Migrate orphaned blocked slots ──
   const orphanedBlocked = await prisma.blocked.findMany({ where: { eventId: null } });
   for (const b of orphanedBlocked) {
     const day = DAY_MAP[b.day] ?? b.day;
