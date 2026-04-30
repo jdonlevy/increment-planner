@@ -624,7 +624,7 @@ export default function EventPage() {
                         onDragStart={id => { draggingSessionId.current = id; }} />
                       <div className="absolute top-1 right-6 hidden group-hover:flex gap-0.5">
                         <button onClick={() => setEditSession(s)} className="text-[10px] text-slate-400 hover:text-indigo-600 px-1">✎</button>
-                        <button onClick={() => removeSession(s.id)} className="text-[10px] text-slate-400 hover:text-red-500 px-1">✕</button>
+                        <button onClick={() => { if (confirm(`Delete "${s.name}"? This cannot be undone.`)) removeSession(s.id); }} className="text-[10px] text-slate-400 hover:text-red-500 px-1">✕</button>
                       </div>
                     </div>
                   ))}
@@ -647,7 +647,7 @@ export default function EventPage() {
                           <p className="text-[10px] text-slate-400 mt-0.5">{formatDayTab(p.day)} · {SLOTS[p.slotIdx]} · {room?.name}</p>
                           <div className="absolute top-1 right-1 hidden group-hover:flex gap-0.5">
                             <button onClick={() => setEditSession(s)} className="text-[10px] text-slate-400 hover:text-indigo-600 px-1">✎</button>
-                            <button onClick={() => removeSession(s.id)} className="text-[10px] text-slate-400 hover:text-red-500 px-1">✕</button>
+                            <button onClick={() => { if (confirm(`Delete "${s.name}"? This cannot be undone.`)) removeSession(s.id); }} className="text-[10px] text-slate-400 hover:text-red-500 px-1">✕</button>
                           </div>
                         </div>
                       );
