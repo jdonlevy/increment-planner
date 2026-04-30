@@ -456,11 +456,13 @@ export default function EventPage() {
         ? [rooms.find(r => r.id === homeRoomId)!, ...rooms.filter(r => r.id !== homeRoomId)].filter(Boolean)
         : rooms;
 
-      for (const day of event.days) {
+      // Room is the outermost loop — always fill the home room before trying others
+      for (const room of orderedRooms) {
         if (placed) break;
-        for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
-          if (placed || LUNCH_SLOT_INDICES.has(slotIdx)) continue;
-          for (const room of orderedRooms) {
+        for (const day of event.days) {
+          if (placed) break;
+          for (let slotIdx = 0; slotIdx < SLOTS.length; slotIdx++) {
+            if (LUNCH_SLOT_INDICES.has(slotIdx)) continue;
             if (roomBusy(room.id, day, slotIdx)) continue;
             if (isBlk(room.id, day, slotIdx)) continue;
             if (session.attendeeIds.some(pid => personBusy(pid, day, slotIdx))) continue;
