@@ -14,6 +14,7 @@ model Event {
   slots      String[]
   lunchSlots Int[]
   lunchLabel String     @default("Lunch Break")
+  lunchColor String     @default("#fef3c7")
   breaks     Json       @default("[]")
   createdAt  DateTime    @default(now())
   sessions   Session[]

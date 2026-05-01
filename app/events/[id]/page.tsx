@@ -11,8 +11,8 @@ type Person  = { id: string; name: string; teamId: string };
 type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
-type EventBreak = { label: string; from: string; to: string };
-type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string; breaks: EventBreak[] };
+type EventBreak = { label: string; from: string; to: string; color: string };
+type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string; lunchColor: string; breaks: EventBreak[] };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -34,6 +34,14 @@ const TEAM_COLORS = [
   { bg: "bg-orange-100",  border: "border-orange-300",  text: "text-orange-800",  dot: "bg-orange-400",  hex: "#ffedd5" },
   { bg: "bg-teal-100",    border: "border-teal-300",    text: "text-teal-800",    dot: "bg-teal-400",    hex: "#ccfbf1" },
 ];
+
+// Returns a darkened version of a hex colour for text (60% darker)
+function darkenHex(hex: string): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+  const d = (x: number) => Math.max(0, Math.floor(x * 0.4)).toString(16).padStart(2,"0");
+  return `#${d(r)}${d(g)}${d(b)}`;
+}
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -246,11 +254,13 @@ export default function EventPage() {
   const [editLunchStart,    setEditLunchStart]    = useState("12:00");
   const [editLunchEnd,      setEditLunchEnd]      = useState("13:00");
   const [editLunchLabel,    setEditLunchLabel]    = useState("Lunch Break");
+  const [editLunchColor,    setEditLunchColor]    = useState("#fef3c7");
   const [editHasLunch,      setEditHasLunch]      = useState(true);
   const [editBreaks,        setEditBreaks]        = useState<EventBreak[]>([]);
   const [newBreakLabel,     setNewBreakLabel]     = useState("");
   const [newBreakFrom,      setNewBreakFrom]      = useState("10:30");
   const [newBreakTo,        setNewBreakTo]        = useState("11:00");
+  const [newBreakColor,     setNewBreakColor]     = useState("#fed7aa");
   const [savingSlots,       setSavingSlots]       = useState(false);
   const [slotSaveError,     setSlotSaveError]     = useState("");
 
@@ -606,7 +616,7 @@ export default function EventPage() {
             const lunchEndIdx = Math.max(...[...activeLunchIndices]);
             const [lh, lm] = (activeSlots[lunchEndIdx] ?? "12:30").split(":").map(Number);
             const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
-            html += `<tr><td class="time-cell">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell">${event?.lunchLabel ?? "Lunch Break"} (${lunchStart}–${lunchEnd})</td></tr>`;
+            { const lc = event?.lunchColor ?? "#fef3c7"; const lt = darkenHex(lc); html += `<tr><td class="time-cell" style="background:${lc};color:${lt}">${lunchStart}</td><td colspan="${rooms.length}" class="lunch-cell" style="background:${lc};color:${lt}">${event?.lunchLabel ?? "Lunch Break"} (${lunchStart}–${lunchEnd})</td></tr>`; }
             lunchRendered = true;
           }
           continue;
@@ -614,7 +624,7 @@ export default function EventPage() {
         const breakMatch = activeBreaks.find(b => b.slotIndices.has(slotIdx));
         if (breakMatch) {
           if (!renderedBreaksPdf.has(breakMatch.label)) {
-            html += `<tr><td class="time-cell">${breakMatch.from}</td><td colspan="${rooms.length}" class="lunch-cell" style="background:#fff7ed;color:#fb923c">${breakMatch.label} (${breakMatch.from}–${breakMatch.to})</td></tr>`;
+            { const bc = breakMatch.color ?? "#fed7aa"; const bct = darkenHex(bc); html += `<tr><td class="time-cell" style="background:${bc};color:${bct}">${breakMatch.from}</td><td colspan="${rooms.length}" class="lunch-cell" style="background:${bc};color:${bct}">${breakMatch.label} (${breakMatch.from}–${breakMatch.to})</td></tr>`; }
             renderedBreaksPdf.add(breakMatch.label);
           }
           continue;
@@ -709,8 +719,9 @@ export default function EventPage() {
                   setEditLunchEnd(`${String(Math.floor(endMins/60)).padStart(2,"0")}:${String(endMins%60).padStart(2,"0")}`);
                 }
                 setEditLunchLabel(event?.lunchLabel ?? "Lunch Break");
+                setEditLunchColor(event?.lunchColor ?? "#fef3c7");
                 setEditBreaks(event?.breaks ?? []);
-                setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00");
+                setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00"); setNewBreakColor("#fed7aa");
                 setShowSlotEditor(true);
               }}
               className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
@@ -971,12 +982,14 @@ export default function EventPage() {
                           const lunchEndIdx = Math.max(...[...activeLunchIndices]);
                           const [lh, lm] = (activeSlots[lunchEndIdx] ?? "12:30").split(":").map(Number);
                           const lunchEnd = `${String(Math.floor((lh * 60 + lm + 30) / 60)).padStart(2,"0")}:${String((lh * 60 + lm + 30) % 60).padStart(2,"0")}`;
+                          const lc = event?.lunchColor ?? "#fef3c7";
+                          const lt = darkenHex(lc);
                           rows.push(
                             <tr key="lunch">
-                              <td className="sticky left-0 bg-amber-50 border-b border-r border-amber-100 px-3 py-2 text-[10px] font-medium text-amber-500 z-10 whitespace-nowrap">
+                              <td className="sticky left-0 border-b border-r px-3 py-2 text-[10px] font-medium z-10 whitespace-nowrap" style={{ background: lc, color: lt, borderColor: lt + "33" }}>
                                 {lunchStart}
                               </td>
-                              <td colSpan={rooms.length} className="border-b border-amber-100 bg-amber-50 text-center text-xs text-amber-400 font-medium py-2 select-none">
+                              <td colSpan={rooms.length} className="border-b text-center text-xs font-medium py-2 select-none" style={{ background: lc, color: lt, borderColor: lt + "33" }}>
                                 {event?.lunchLabel ?? "Lunch Break"} ({lunchStart}–{lunchEnd})
                               </td>
                             </tr>
@@ -988,12 +1001,14 @@ export default function EventPage() {
                       const breakMatch = activeBreaks.find(b => b.slotIndices.has(slotIdx));
                       if (breakMatch) {
                         if (!renderedBreaks.has(breakMatch.label)) {
+                          const bc = breakMatch.color ?? "#fed7aa";
+                          const bt = darkenHex(bc);
                           rows.push(
                             <tr key={`break-${breakMatch.label}`}>
-                              <td className="sticky left-0 bg-orange-50 border-b border-r border-orange-100 px-3 py-2 text-[10px] font-medium text-orange-400 z-10 whitespace-nowrap">
+                              <td className="sticky left-0 border-b border-r px-3 py-2 text-[10px] font-medium z-10 whitespace-nowrap" style={{ background: bc, color: bt, borderColor: bt + "33" }}>
                                 {breakMatch.from}
                               </td>
-                              <td colSpan={rooms.length} className="border-b border-orange-100 bg-orange-50 text-center text-xs text-orange-400 font-medium py-2 select-none">
+                              <td colSpan={rooms.length} className="border-b text-center text-xs font-medium py-2 select-none" style={{ background: bc, color: bt, borderColor: bt + "33" }}>
                                 {breakMatch.label} ({breakMatch.from}–{breakMatch.to})
                               </td>
                             </tr>
@@ -1126,10 +1141,17 @@ export default function EventPage() {
                 </div>
                 {editHasLunch && (
                   <>
-                    <div>
-                      <label className="block text-xs text-slate-500 mb-1">Label</label>
-                      <input value={editLunchLabel} onChange={e => setEditLunchLabel(e.target.value)} placeholder="Lunch Break"
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">Label</label>
+                        <input value={editLunchLabel} onChange={e => setEditLunchLabel(e.target.value)} placeholder="Lunch Break"
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">Colour</label>
+                        <input type="color" value={editLunchColor} onChange={e => setEditLunchColor(e.target.value)}
+                          className="h-[38px] w-10 rounded-lg border border-slate-300 p-0.5 cursor-pointer" />
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -1151,19 +1173,30 @@ export default function EventPage() {
               <div className="space-y-3 pt-3 border-t border-slate-100">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Additional Breaks</p>
                 {editBreaks.map((b, i) => (
-                  <div key={i} className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
-                    <span className="flex-1 text-xs font-medium text-slate-700">{b.label}</span>
-                    <span className="text-xs text-slate-400">{b.from}–{b.to}</span>
+                  <div key={i} className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ background: b.color ?? "#fed7aa" }}>
+                    <span className="w-3 h-3 rounded-full border border-white/50 shrink-0" style={{ background: darkenHex(b.color ?? "#fed7aa") }} />
+                    <span className="flex-1 text-xs font-medium" style={{ color: darkenHex(b.color ?? "#fed7aa") }}>{b.label}</span>
+                    <span className="text-xs opacity-60" style={{ color: darkenHex(b.color ?? "#fed7aa") }}>{b.from}–{b.to}</span>
+                    <input type="color" value={b.color ?? "#fed7aa"}
+                      onChange={e => setEditBreaks(prev => prev.map((x, j) => j === i ? { ...x, color: e.target.value } : x))}
+                      className="h-5 w-5 rounded border-0 cursor-pointer p-0 shrink-0" title="Change colour" />
                     <button onClick={() => setEditBreaks(prev => prev.filter((_, j) => j !== i))}
-                      className="text-slate-300 hover:text-red-500 text-xs ml-1">✕</button>
+                      className="text-xs opacity-50 hover:opacity-100 ml-1" style={{ color: darkenHex(b.color ?? "#fed7aa") }}>✕</button>
                   </div>
                 ))}
                 <div className="space-y-2 pt-1">
-                  <input
-                    value={newBreakLabel} onChange={e => setNewBreakLabel(e.target.value)}
-                    placeholder="Break name (e.g. Tea Break)"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <input
+                      value={newBreakLabel} onChange={e => setNewBreakLabel(e.target.value)}
+                      placeholder="Break name (e.g. Tea Break)"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">Colour</label>
+                      <input type="color" value={newBreakColor} onChange={e => setNewBreakColor(e.target.value)}
+                        className="h-[38px] w-10 rounded-lg border border-slate-300 p-0.5 cursor-pointer" />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-slate-500 mb-1">From</label>
@@ -1179,8 +1212,8 @@ export default function EventPage() {
                   <button
                     onClick={() => {
                       if (!newBreakLabel.trim() || !newBreakFrom || !newBreakTo) return;
-                      setEditBreaks(prev => [...prev, { label: newBreakLabel.trim(), from: newBreakFrom, to: newBreakTo }]);
-                      setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00");
+                      setEditBreaks(prev => [...prev, { label: newBreakLabel.trim(), from: newBreakFrom, to: newBreakTo, color: newBreakColor }]);
+                      setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00"); setNewBreakColor("#fed7aa");
                     }}
                     disabled={!newBreakLabel.trim()}
                     className="w-full border border-dashed border-slate-300 hover:border-indigo-400 hover:text-indigo-600 disabled:opacity-40 text-slate-500 text-xs font-medium py-2 rounded-lg transition-colors"
@@ -1223,7 +1256,7 @@ export default function EventPage() {
                   const res = await fetch(`/api/events/${event.id}`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel, breaks: editBreaks }),
+                    body: JSON.stringify({ slots: newSlots, lunchSlots: newLunchSlots, lunchLabel: editLunchLabel, lunchColor: editLunchColor, breaks: editBreaks }),
                   });
                   if (res.ok) {
                     setEvent(await res.json());
