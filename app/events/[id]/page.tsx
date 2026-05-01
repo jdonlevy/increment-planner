@@ -779,7 +779,7 @@ export default function EventPage() {
       <header className="bg-white border-b border-slate-200 shadow-sm shrink-0">
         <div className="max-w-[1600px] mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <button onClick={() => router.push("/")} className="text-slate-400 hover:text-slate-700 text-sm transition-colors">
+            <button onClick={() => router.push("/")} className="text-slate-400 hover:text-slate-700 text-sm transition-all active:scale-95 select-none">
               ← Back
             </button>
             <div className="h-4 w-px bg-slate-200" />
@@ -799,8 +799,8 @@ export default function EventPage() {
               return (
                 <button
                   onClick={() => setShowActivity(v => !v)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors text-xs font-medium ${
-                    showActivity ? "bg-emerald-50 border-emerald-300 text-emerald-700" : "border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-600"
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all text-xs font-medium active:scale-95 select-none ${
+                    showActivity ? "bg-emerald-50 border-emerald-300 text-emerald-700 active:bg-emerald-100" : "border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-600 active:bg-slate-100"
                   }`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -863,20 +863,20 @@ export default function EventPage() {
                 setNewBreakLabel(""); setNewBreakFrom("10:30"); setNewBreakTo("11:00"); setNewBreakColor("#fed7aa");
                 setShowSlotEditor(true);
               }}
-              className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+              className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-300 hover:border-slate-400 px-3 py-1.5 rounded-lg transition-all active:scale-95 active:bg-slate-100 select-none"
             >
               Edit Times
             </button>
             <button
               onClick={() => autoSchedule()}
-              className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+              className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-300 hover:border-slate-400 px-3 py-1.5 rounded-lg transition-all active:scale-95 active:bg-slate-100 select-none"
             >
               Auto-Schedule
             </button>
-            <button onClick={exportCSV} className="text-xs text-slate-600 hover:text-slate-900 border border-slate-300 px-3 py-1.5 rounded-lg transition-colors">
+            <button onClick={exportCSV} className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-300 hover:border-slate-400 px-3 py-1.5 rounded-lg transition-all active:scale-95 active:bg-slate-100 select-none">
               Export CSV
             </button>
-            <button onClick={exportPDF} className="text-xs text-white bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg transition-colors font-medium">
+            <button onClick={exportPDF} className="text-xs text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-95 px-3 py-1.5 rounded-lg transition-all font-medium select-none">
               Export PDF
             </button>
           </div>
