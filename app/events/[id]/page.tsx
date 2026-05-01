@@ -297,6 +297,7 @@ export default function EventPage() {
   const myName           = useRef("Anonymous");
   const lastSeenId       = useRef<string | null>(null);
   const firstPoll        = useRef(false);
+  const applyingRemote   = useRef(false);
   const [liveReady,      setLiveReady]      = useState(false);
 
   // ── Load ──
@@ -343,6 +344,7 @@ export default function EventPage() {
 
   const triggerSave = useCallback(() => {
     if (!loaded.current) return;
+    if (applyingRemote.current) return;
     // Safety guard: never save if we'd be wiping sessions that existed on load
     const { sessions: initS } = initialCounts.current;
     if (initS > 0 && schedPayload.sessions.length === 0) return;
@@ -383,6 +385,26 @@ export default function EventPage() {
           const others = newEntries.filter(a => a.actor !== myName.current);
           if (others.length > 0) {
             setToasts(prev => [...others, ...prev].slice(0, 4));
+            // Re-fetch the schedule so we see the actual changes, but only
+            // if we're not mid-edit (saveStatus ref would be stale here, use
+            // the save timer: if no pending save, we're safe to apply)
+            if (!saveTimerRef.current) {
+              try {
+                const schedRes = await fetch(`/api/events/${eventId}/schedule`);
+                if (schedRes.ok) {
+                  const sched = await schedRes.json();
+                  applyingRemote.current = true;
+                  setSessions(sched.sessions.map((s: { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendees: { id: string }[] }) => ({
+                    id: s.id, name: s.name, notes: s.notes, crossTeam: s.crossTeam ?? false, teamId: s.teamId,
+                    attendeeIds: s.attendees.map((a: { id: string }) => a.id),
+                  })));
+                  setPlacements(sched.placements);
+                  setBlocked(sched.blocked);
+                  // Allow the state updates to flush before re-enabling save
+                  setTimeout(() => { applyingRemote.current = false; }, 100);
+                }
+              } catch { /* ignore */ }
+            }
           }
         }
       } catch { /* ignore */ }
