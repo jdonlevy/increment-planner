@@ -366,48 +366,51 @@ export default function EventPage() {
   // ── Live activity polling ──
   useEffect(() => {
     if (!liveReady) return;
+
+    const applySchedule = async () => {
+      if (saveTimerRef.current) return; // user has unsaved edits — don't overwrite
+      try {
+        const schedRes = await fetch(`/api/events/${eventId}/schedule`);
+        if (!schedRes.ok) return;
+        const sched = await schedRes.json();
+        applyingRemote.current = true;
+        setSessions(sched.sessions.map((s: { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendees: { id: string }[] }) => ({
+          id: s.id, name: s.name, notes: s.notes, crossTeam: s.crossTeam ?? false, teamId: s.teamId,
+          attendeeIds: s.attendees.map((a: { id: string }) => a.id),
+        })));
+        setPlacements(sched.placements);
+        setBlocked(sched.blocked);
+        setTimeout(() => { applyingRemote.current = false; }, 100);
+      } catch { /* ignore */ }
+    };
+
     const poll = async () => {
       try {
         const res = await fetch(`/api/events/${eventId}/activity`);
         if (!res.ok) return;
         const data: ActivityEntry[] = await res.json();
         setActivities(data);
+
         if (!firstPoll.current) {
-          // On first poll, just record where we are — don't show toasts
           if (data.length > 0) lastSeenId.current = data[0].id;
           firstPoll.current = true;
           return;
         }
-        // Find anything newer than last seen
+
+        // Find new entries since last poll
         const lastIdx = data.findIndex(a => a.id === lastSeenId.current);
         const newEntries = lastIdx > 0 ? data.slice(0, lastIdx) : lastIdx === -1 ? data : [];
-        if (newEntries.length > 0) {
-          lastSeenId.current = data[0].id;
-          const others = newEntries.filter(a => a.actor !== myName.current);
-          if (others.length > 0) {
-            setToasts(prev => [...others, ...prev].slice(0, 4));
-            // Re-fetch schedule — only skip if user has unsaved edits in flight
-            if (!saveTimerRef.current) {
-              try {
-                const schedRes = await fetch(`/api/events/${eventId}/schedule`);
-                if (schedRes.ok) {
-                  const sched = await schedRes.json();
-                  applyingRemote.current = true;
-                  setSessions(sched.sessions.map((s: { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendees: { id: string }[] }) => ({
-                    id: s.id, name: s.name, notes: s.notes, crossTeam: s.crossTeam ?? false, teamId: s.teamId,
-                    attendeeIds: s.attendees.map((a: { id: string }) => a.id),
-                  })));
-                  setPlacements(sched.placements);
-                  setBlocked(sched.blocked);
-                  // Allow the state updates to flush before re-enabling save
-                  setTimeout(() => { applyingRemote.current = false; }, 100);
-                }
-              } catch { /* ignore */ }
-            }
-          }
+        if (newEntries.length === 0) return;
+
+        lastSeenId.current = data[0].id;
+        const others = newEntries.filter(a => a.actor !== myName.current);
+        if (others.length > 0) {
+          setToasts(prev => [...others, ...prev].slice(0, 4));
+          await applySchedule();
         }
       } catch { /* ignore */ }
     };
+
     poll();
     const iv = setInterval(poll, 8000);
     return () => clearInterval(iv);
