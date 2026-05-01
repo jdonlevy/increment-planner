@@ -17,6 +17,18 @@ export async function POST() {
   await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "breaks"     JSONB      NOT NULL DEFAULT '[]'`;
   await prisma.$executeRaw`ALTER TABLE "Event"     ADD COLUMN IF NOT EXISTS "lunchColor" TEXT       NOT NULL DEFAULT '#fef3c7'`;
 
+  // ── Step 6: Ensure ActivityLog table exists ──
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS "ActivityLog" (
+      "id"        TEXT         NOT NULL,
+      "eventId"   TEXT         NOT NULL,
+      "actor"     TEXT         NOT NULL,
+      "action"    TEXT         NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "ActivityLog_pkey" PRIMARY KEY ("id")
+    )`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "ActivityLog_eventId_idx" ON "ActivityLog"("eventId")`;
+
   // ── Step 2: Ensure IP MAY 2026 event exists ──
   let event = await prisma.event.findFirst({ where: { name: "IP MAY 2026" } });
 

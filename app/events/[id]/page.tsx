@@ -11,7 +11,8 @@ type Person  = { id: string; name: string; teamId: string };
 type Session = { id: string; name: string; notes: string; crossTeam: boolean; teamId: string; attendeeIds: string[] };
 type Placement = { id: string; sessionId: string; roomId: string; day: string; slotIdx: number };
 type Blocked   = { id: string; roomId: string; day: string; slotIdx: number };
-type EventBreak = { label: string; from: string; to: string; color: string };
+type EventBreak    = { label: string; from: string; to: string; color: string };
+type ActivityEntry = { id: string; actor: string; action: string; createdAt: string };
 type Event     = { id: string; name: string; days: string[]; slots: string[]; lunchSlots: number[]; lunchLabel: string; lunchColor: string; breaks: EventBreak[] };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -34,6 +35,17 @@ const TEAM_COLORS = [
   { bg: "bg-orange-100",  border: "border-orange-300",  text: "text-orange-800",  dot: "bg-orange-400",  hex: "#ffedd5" },
   { bg: "bg-teal-100",    border: "border-teal-300",    text: "text-teal-800",    dot: "bg-teal-400",    hex: "#ccfbf1" },
 ];
+
+function initials(name: string) {
+  return name.split(" ").map(w => w[0] ?? "").join("").toUpperCase().slice(0, 2) || "?";
+}
+
+function timeAgo(iso: string) {
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return "just now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  return `${Math.floor(secs / 3600)}h ago`;
+}
 
 // Returns a darkened version of a hex colour for text (60% darker)
 function darkenHex(hex: string): string {
@@ -275,6 +287,18 @@ export default function EventPage() {
   const initialCounts = useRef({ sessions: -1, placements: -1, blocked: -1 });
   const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Live activity ──
+  const [plannerName,    setPlannerName]    = useState("Anonymous");
+  const [editingName,    setEditingName]    = useState(false);
+  const [nameInput,      setNameInput]      = useState("");
+  const [activities,     setActivities]     = useState<ActivityEntry[]>([]);
+  const [showActivity,   setShowActivity]   = useState(false);
+  const [toasts,         setToasts]         = useState<ActivityEntry[]>([]);
+  const myName           = useRef("Anonymous");
+  const lastSeenId       = useRef<string | null>(null);
+  const firstPoll        = useRef(false);
+  const [liveReady,      setLiveReady]      = useState(false);
+
   // ── Load ──
   useEffect(() => {
     const init = async () => {
@@ -306,6 +330,9 @@ export default function EventPage() {
       };
       setLoading(false);
       loaded.current = true;
+      const stored = localStorage.getItem("plannerName") ?? "";
+      if (stored) { setPlannerName(stored); myName.current = stored; }
+      setLiveReady(true);
     };
     init();
   }, [eventId, router]);
@@ -332,6 +359,54 @@ export default function EventPage() {
   }, [globalPayload, schedPayload, eventId]);
 
   useEffect(() => { if (loaded.current) triggerSave(); }, [globalPayload, schedPayload, triggerSave]);
+
+  // ── Live activity polling ──
+  useEffect(() => {
+    if (!liveReady) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/events/${eventId}/activity`);
+        if (!res.ok) return;
+        const data: ActivityEntry[] = await res.json();
+        setActivities(data);
+        if (!firstPoll.current) {
+          // On first poll, just record where we are — don't show toasts
+          if (data.length > 0) lastSeenId.current = data[0].id;
+          firstPoll.current = true;
+          return;
+        }
+        // Find anything newer than last seen
+        const lastIdx = data.findIndex(a => a.id === lastSeenId.current);
+        const newEntries = lastIdx > 0 ? data.slice(0, lastIdx) : lastIdx === -1 ? data : [];
+        if (newEntries.length > 0) {
+          lastSeenId.current = data[0].id;
+          const others = newEntries.filter(a => a.actor !== myName.current);
+          if (others.length > 0) {
+            setToasts(prev => [...others, ...prev].slice(0, 4));
+          }
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const iv = setInterval(poll, 8000);
+    return () => clearInterval(iv);
+  }, [liveReady, eventId]);
+
+  // ── Auto-dismiss toasts ──
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const t = setTimeout(() => setToasts(prev => prev.slice(0, -1)), 5000);
+    return () => clearTimeout(t);
+  }, [toasts]);
+
+  // ── Log activity ──
+  const logActivity = useCallback((action: string) => {
+    fetch(`/api/events/${eventId}/activity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: myName.current, action }),
+    }).catch(() => {});
+  }, [eventId]);
 
   // ── Derived ──
   const activeSlots        = useMemo(() => event?.slots?.length      ? event.slots      : SLOTS,                          [event]);
@@ -367,17 +442,24 @@ export default function EventPage() {
       setPlacements(prev => [...prev.filter(p => !(p.roomId === placeAt.roomId && p.day === placeAt.day && p.slotIdx === placeAt.slotIdx)), {
         id: uid(), sessionId: id, roomId: placeAt.roomId, day: placeAt.day, slotIdx: placeAt.slotIdx,
       }]);
+      const room = rooms.find(r => r.id === placeAt.roomId);
+      logActivity(`Scheduled '${name.trim()}' in ${room?.name ?? "a room"} at ${activeSlots[placeAt.slotIdx]}`);
+    } else {
+      logActivity(`Added session '${name.trim()}'`);
     }
   };
 
   const removeSession = (id: string) => {
+    const sess = sessions.find(s => s.id === id);
     setSessions(prev => prev.filter(s => s.id !== id));
     setPlacements(prev => prev.filter(p => p.sessionId !== id));
+    if (sess) logActivity(`Removed session '${sess.name}'`);
   };
 
   const saveEdit = () => {
     if (!editSession) return;
     setSessions(prev => prev.map(s => s.id === editSession.id ? editSession : s));
+    logActivity(`Edited session '${editSession.name}'`);
     setEditSession(null);
   };
 
@@ -443,25 +525,35 @@ export default function EventPage() {
     // Moving a session
     const id = draggingSessionId.current;
     if (!id || isBlockedCell(roomId, day, slotIdx)) return;
+    const sess = sessions.find(s => s.id === id);
+    const room = rooms.find(r => r.id === roomId);
     setPlacements(prev => [
       ...prev.filter(p => p.sessionId !== id && !(p.roomId === roomId && p.day === day && p.slotIdx === slotIdx)),
       { id: uid(), sessionId: id, roomId, day, slotIdx },
     ]);
+    if (sess && room) logActivity(`Moved '${sess.name}' → ${room.name} at ${activeSlots[slotIdx]}`);
     draggingSessionId.current = null;
     setDragOverCell(null);
   };
 
   const handleRemovePlacement = (placementId: string) => {
+    const pl = placements.find(p => p.id === placementId);
+    const sess = pl ? sessions.find(s => s.id === pl.sessionId) : null;
     setPlacements(prev => prev.filter(p => p.id !== placementId));
+    if (sess) logActivity(`Unscheduled '${sess.name}'`);
   };
 
   const toggleBlocked = (roomId: string, day: string, slotIdx: number) => {
     if (placementAt(roomId, day, slotIdx) || allBlockedIndices.has(slotIdx)) return;
+    const room = rooms.find(r => r.id === roomId);
+    const exists = blocked.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
     setBlocked(prev => {
-      const exists = prev.find(b => b.roomId === roomId && b.day === day && b.slotIdx === slotIdx);
       if (exists) return prev.filter(b => b.id !== exists.id);
       return [...prev, { id: uid(), roomId, day, slotIdx }];
     });
+    if (room) logActivity(exists
+      ? `Cleared unavailable: ${room.name} at ${activeSlots[slotIdx]}`
+      : `Marked ${room.name} at ${activeSlots[slotIdx]} as unavailable`);
   };
 
   // ── Cell click ──
@@ -542,7 +634,9 @@ export default function EventPage() {
         }
       }
     }
+    const scheduled = newPl.length - keptPlacements.length;
     setPlacements(newPl);
+    logActivity(`Auto-scheduled ${scheduled} session${scheduled !== 1 ? "s" : ""}`);
   };
 
   // ── CSV Export ──
@@ -695,6 +789,51 @@ export default function EventPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Live presence + activity */}
+            {(() => {
+              const recentActors = [...new Map(
+                activities
+                  .filter(a => Date.now() - new Date(a.createdAt).getTime() < 5 * 60 * 1000)
+                  .map(a => [a.actor, a])
+              ).values()].slice(0, 5);
+              return (
+                <button
+                  onClick={() => setShowActivity(v => !v)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors text-xs font-medium ${
+                    showActivity ? "bg-emerald-50 border-emerald-300 text-emerald-700" : "border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-600"
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Live</span>
+                  {recentActors.length > 0 && (
+                    <span className="flex -space-x-1 ml-0.5">
+                      {recentActors.map(a => (
+                        <span key={a.actor} title={a.actor}
+                          className="w-5 h-5 rounded-full bg-indigo-100 border border-white flex items-center justify-center text-[9px] font-bold text-indigo-600">
+                          {initials(a.actor)}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
+            {/* Name pill */}
+            {editingName ? (
+              <form onSubmit={e => { e.preventDefault(); const n = nameInput.trim() || "Anonymous"; setPlannerName(n); myName.current = n; localStorage.setItem("plannerName", n); setEditingName(false); }} className="flex gap-1">
+                <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)} placeholder="Your name"
+                  className="border border-indigo-300 rounded-lg px-2 py-1 text-xs text-slate-900 w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                <button type="submit" className="text-xs bg-indigo-600 text-white px-2 py-1 rounded-lg">✓</button>
+                <button type="button" onClick={() => setEditingName(false)} className="text-xs text-slate-400 hover:text-slate-700 px-1">✕</button>
+              </form>
+            ) : (
+              <button onClick={() => { setNameInput(plannerName === "Anonymous" ? "" : plannerName); setEditingName(true); }}
+                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 border border-slate-200 hover:border-slate-400 px-2.5 py-1.5 rounded-lg transition-colors">
+                <span className="w-4 h-4 rounded-full bg-indigo-100 flex items-center justify-center text-[9px] font-bold text-indigo-600">{initials(plannerName)}</span>
+                {plannerName}
+              </button>
+            )}
+            <div className="h-4 w-px bg-slate-200" />
             <span className={`text-xs font-medium ${
               saveStatus === "saved" ? "text-emerald-600" : saveStatus === "saving" ? "text-amber-500" : "text-slate-400"
             }`}>
@@ -1407,6 +1546,51 @@ export default function EventPage() {
           </div>
         </div>
       )}
+
+      {/* ── Live Activity Panel ── */}
+      {showActivity && (
+        <div className="fixed top-0 right-0 h-full w-80 bg-white border-l border-slate-200 shadow-2xl z-40 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <h2 className="text-sm font-semibold text-slate-900">Live Activity</h2>
+            </div>
+            <button onClick={() => setShowActivity(false)} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {activities.length === 0 && (
+              <p className="text-xs text-slate-400 text-center py-8">No activity yet</p>
+            )}
+            {activities.map(a => (
+              <div key={a.id} className={`flex gap-2.5 p-2.5 rounded-xl ${a.actor === plannerName ? "bg-indigo-50" : "bg-slate-50"}`}>
+                <span className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-600 shrink-0 mt-0.5">
+                  {initials(a.actor)}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold text-slate-700">{a.actor}</p>
+                  <p className="text-[11px] text-slate-600 leading-snug">{a.action}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">{timeAgo(a.createdAt)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Activity Toasts ── */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 items-end pointer-events-none">
+        {toasts.map(t => (
+          <div key={t.id} className="bg-slate-900 text-white text-xs rounded-xl px-4 py-3 shadow-xl max-w-xs flex gap-2.5 items-start pointer-events-auto">
+            <span className="w-6 h-6 rounded-full bg-indigo-400 flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5">
+              {initials(t.actor)}
+            </span>
+            <div>
+              <p className="font-semibold text-indigo-300">{t.actor}</p>
+              <p className="text-slate-300">{t.action}</p>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
