@@ -351,6 +351,7 @@ export default function EventPage() {
     setSaveStatus("unsaved");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
+      saveTimerRef.current = null;
       setSaveStatus("saving");
       await Promise.all([
         fetch("/api/global", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(globalPayload) }),
@@ -385,9 +386,7 @@ export default function EventPage() {
           const others = newEntries.filter(a => a.actor !== myName.current);
           if (others.length > 0) {
             setToasts(prev => [...others, ...prev].slice(0, 4));
-            // Re-fetch the schedule so we see the actual changes, but only
-            // if we're not mid-edit (saveStatus ref would be stale here, use
-            // the save timer: if no pending save, we're safe to apply)
+            // Re-fetch schedule — only skip if user has unsaved edits in flight
             if (!saveTimerRef.current) {
               try {
                 const schedRes = await fetch(`/api/events/${eventId}/schedule`);
