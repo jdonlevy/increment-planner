@@ -287,6 +287,12 @@ export default function EventPage() {
   const initialCounts = useRef({ sessions: -1, placements: -1, blocked: -1 });
   const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Versioning ──
+  type SnapshotMeta = { id: string; actor: string; createdAt: string };
+  const [showHistory,    setShowHistory]    = useState(false);
+  const [snapshots,      setSnapshots]      = useState<SnapshotMeta[]>([]);
+  const [restoring,      setRestoring]      = useState<string | null>(null);
+
   // ── Live activity ──
   const [plannerName,    setPlannerName]    = useState("Anonymous");
   const [editingName,    setEditingName]    = useState(false);
@@ -305,15 +311,17 @@ export default function EventPage() {
     const init = async () => {
       // Ensure DB columns are up to date before loading (idempotent, fast after first run)
       await fetch("/api/migrate", { method: "POST" });
-      const [evRes, globalRes, schedRes] = await Promise.all([
+      const [evRes, globalRes, schedRes, snapRes] = await Promise.all([
         fetch(`/api/events/${eventId}`),
         fetch("/api/global"),
         fetch(`/api/events/${eventId}/schedule`),
+        fetch(`/api/events/${eventId}/snapshots`),
       ]);
       if (!evRes.ok) { router.push("/"); return; }
       const ev     = await evRes.json();
       const global = await globalRes.json();
       const sched  = await schedRes.json();
+      if (snapRes.ok) setSnapshots(await snapRes.json());
       setEvent(ev);
       setRooms(global.rooms);
       setTeams(global.teams);
@@ -358,6 +366,17 @@ export default function EventPage() {
         fetch(`/api/events/${eventId}/schedule`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(schedPayload) }),
       ]);
       setSaveStatus("saved");
+      // Save a snapshot and refresh the snapshot list
+      fetch(`/api/events/${eventId}/snapshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: myName.current, data: schedPayload }),
+      }).then(() =>
+        fetch(`/api/events/${eventId}/snapshots`)
+          .then(r => r.json())
+          .then(setSnapshots)
+          .catch(() => {})
+      ).catch(() => {});
     }, 1500);
   }, [globalPayload, schedPayload, eventId]);
 
@@ -899,6 +918,14 @@ export default function EventPage() {
             </button>
             <button onClick={exportCSV} className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-300 hover:border-slate-400 px-3 py-1.5 rounded-lg transition-all active:scale-95 active:bg-slate-100 select-none">
               Export CSV
+            </button>
+            <button
+              onClick={() => setShowHistory(v => !v)}
+              className={`text-xs border px-3 py-1.5 rounded-lg transition-all active:scale-95 font-medium select-none ${
+                showHistory ? "bg-violet-50 border-violet-300 text-violet-700 active:bg-violet-100" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 border-slate-300 hover:border-slate-400 active:bg-slate-100"
+              }`}
+            >
+              History {snapshots.length > 0 && <span className="ml-1 bg-violet-100 text-violet-600 rounded-full px-1.5 py-0.5 text-[10px] font-bold">{snapshots.length}</span>}
             </button>
             <button onClick={exportPDF} className="text-xs text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-95 px-3 py-1.5 rounded-lg transition-all font-medium select-none">
               Export PDF
@@ -1567,6 +1594,68 @@ export default function EventPage() {
               <button onClick={() => setEditSession(null)} className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">Cancel</button>
               <button onClick={saveEdit} className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors">Save</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── History Panel ── */}
+      {showHistory && (
+        <div className="fixed top-0 right-0 h-full w-80 bg-white border-l border-slate-200 shadow-2xl z-40 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🕐</span>
+              <h2 className="text-sm font-semibold text-slate-900">Version History</h2>
+            </div>
+            <button onClick={() => setShowHistory(false)} className="text-slate-400 hover:text-slate-700 text-lg leading-none">✕</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {snapshots.length === 0 && (
+              <p className="text-xs text-slate-400 text-center py-8">No snapshots yet — changes auto-save every few seconds.</p>
+            )}
+            {snapshots.map((s, i) => (
+              <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:border-violet-200 hover:bg-violet-50 group transition-colors">
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-semibold text-slate-700">{i === 0 ? "Latest" : `Version ${snapshots.length - i}`}</p>
+                  <p className="text-[11px] text-slate-500">{s.actor}</p>
+                  <p className="text-[10px] text-slate-400">{new Date(s.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</p>
+                </div>
+                {i > 0 && (
+                  <button
+                    disabled={!!restoring}
+                    onClick={async () => {
+                      if (!confirm(`Restore this version from ${new Date(s.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}? Current state will be saved as a snapshot first.`)) return;
+                      setRestoring(s.id);
+                      try {
+                        // Fetch full snapshot data
+                        const res = await fetch(`/api/events/${eventId}/snapshots`, {
+                          method: "DELETE",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ snapshotId: s.id }),
+                        });
+                        if (!res.ok) return;
+                        const sched = await res.json() as { sessions: Session[]; placements: Placement[]; blocked: Blocked[] };
+                        applyingRemote.current = true;
+                        setSessions(sched.sessions);
+                        setPlacements(sched.placements);
+                        setBlocked(sched.blocked);
+                        setTimeout(() => {
+                          applyingRemote.current = false;
+                          // Trigger a save of the restored state
+                          loaded.current && triggerSave();
+                        }, 150);
+                        setShowHistory(false);
+                      } finally {
+                        setRestoring(null);
+                      }
+                    }}
+                    className="text-[11px] font-semibold text-violet-600 hover:text-violet-800 disabled:opacity-40 px-2 py-1 rounded-lg hover:bg-violet-100 transition-colors shrink-0"
+                  >
+                    {restoring === s.id ? "…" : "Restore"}
+                  </button>
+                )}
+                {i === 0 && <span className="text-[10px] text-violet-400 font-medium shrink-0">Current</span>}
+              </div>
+            ))}
           </div>
         </div>
       )}

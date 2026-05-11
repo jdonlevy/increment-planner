@@ -80,6 +80,16 @@ model Placement {
   @@unique([roomId, day, slotIdx, eventId])
 }
 
+model ScheduleSnapshot {
+  id        String   @id @default(cuid())
+  eventId   String
+  actor     String
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([eventId])
+}
+
 model ActivityLog {
   id        String   @id @default(cuid())
   eventId   String

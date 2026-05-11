@@ -29,6 +29,18 @@ export async function POST() {
     )`;
   await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "ActivityLog_eventId_idx" ON "ActivityLog"("eventId")`;
 
+  // ── Step 7: Ensure ScheduleSnapshot table exists ──
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS "ScheduleSnapshot" (
+      "id"        TEXT         NOT NULL,
+      "eventId"   TEXT         NOT NULL,
+      "actor"     TEXT         NOT NULL,
+      "data"      JSONB        NOT NULL,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "ScheduleSnapshot_pkey" PRIMARY KEY ("id")
+    )`;
+  await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS "ScheduleSnapshot_eventId_idx" ON "ScheduleSnapshot"("eventId")`;
+
   // ── Step 2: Ensure IP MAY 2026 event exists ──
   let event = await prisma.event.findFirst({ where: { name: "IP MAY 2026" } });
 
